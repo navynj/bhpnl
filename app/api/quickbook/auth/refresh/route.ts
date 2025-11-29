@@ -1,56 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getQuickBooksOAuthClient } from '@/lib/quickbooks';
+import { getQuickBooksOAuthClient } from '@/lib/quickbooks-oauth';
+import {
+  getQuickBooksConnectionById,
+  updateQuickBooksTokens,
+  isRefreshTokenExpired,
+} from '@/lib/quickbooks-token';
+import { auth } from '@/lib/auth';
 
 /**
  * POST /api/quickbook/auth/refresh
- * Refreshes the access token using the refresh token
+ * Refreshes the access token using the refresh token from database
  * 
  * Request body:
  * {
- *   "refresh_token": "your_refresh_token_here"
+ *   "connectionId": "connection_id_here" // Optional, refreshes all if not provided
  * }
  * 
  * Response:
  * {
  *   "success": true,
- *   "tokens": {
- *     "access_token": "...",
- *     "refresh_token": "...", // Always use the new refresh token
- *     "expires_in": 3600,
- *     "token_type": "bearer"
+ *   "connection": {
+ *     "id": "...",
+ *     "realmId": "...",
+ *     ...
  *   }
  * }
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { refresh_token } = body;
-
-    if (!refresh_token) {
+    // Get current authenticated user
+    const session = await auth();
+    if (!session?.user?.id) {
       return NextResponse.json(
-        { error: 'Refresh token is required in request body' },
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const userId = session.user.id;
+    const body = await request.json();
+    const { connectionId } = body;
+
+    if (!connectionId) {
+      return NextResponse.json(
+        { error: 'Connection ID is required in request body' },
         { status: 400 }
+      );
+    }
+
+    // Get connection from database
+    const connection = await getQuickBooksConnectionById(userId, connectionId);
+    if (!connection) {
+      return NextResponse.json(
+        { error: 'Connection not found or access denied' },
+        { status: 404 }
+      );
+    }
+
+    // Check if refresh token is expired
+    if (isRefreshTokenExpired(connection)) {
+      return NextResponse.json(
+        {
+          error: 'Refresh token is expired. User needs to reauthorize.',
+        },
+        { status: 401 }
       );
     }
 
     const oauthClient = getQuickBooksOAuthClient();
     
-    // Set the refresh token in the OAuth client
-    oauthClient.setRefreshToken(refresh_token);
-
-    // Refresh the access token
-    const authResponse = await oauthClient.refresh();
+    // Refresh the access token using the refresh token
+    const authResponse = await oauthClient.refreshUsingToken(connection.refreshToken);
     const tokenData = authResponse.getJson();
+
+    // Calculate new expiration dates
+    const expiresAt = new Date(
+      Date.now() + (tokenData.expires_in || 3600) * 1000
+    );
+    const refreshExpiresAt = tokenData.x_refresh_token_expires_in
+      ? new Date(Date.now() + tokenData.x_refresh_token_expires_in * 1000)
+      : connection.refreshTokenExpiresAt;
+
+    // Update tokens in database
+    const updatedConnection = await updateQuickBooksTokens(connectionId, {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token, // Always use the new refresh token
+      expiresAt,
+      refreshTokenExpiresAt: refreshExpiresAt,
+    });
 
     return NextResponse.json({
       success: true,
-      tokens: {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token, // Always use the new refresh token provided
-        expires_in: tokenData.expires_in, // Typically 3600 seconds (1 hour)
-        token_type: tokenData.token_type,
-      },
-      message: 'Tokens refreshed successfully. Update stored tokens in your database.',
+      connection: updatedConnection,
+      message: 'Tokens refreshed successfully',
     });
   } catch (error: any) {
     console.error('Error refreshing access token:', error);

@@ -1,3 +1,10 @@
+/**
+ * QuickBooks OAuth Configuration
+ * 
+ * This module handles OAuth client setup and scope configuration for QuickBooks integration.
+ * It provides a configured OAuth client instance and scope definitions.
+ */
+
 // Use default import for CommonJS module
 import OAuthClient from 'intuit-oauth';
 
@@ -73,3 +80,4 @@ export function getOAuthClientScopes() {
   const { OAuthClient } = require('intuit-oauth');
   return OAuthClient.scopes;
 }
+

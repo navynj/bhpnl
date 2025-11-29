@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProfitAndLossReport } from '@/lib/quickbooks-api';
+import { auth } from '@/lib/auth';
 
 /**
  * GET /api/quickbook/reports/profit-loss
@@ -9,17 +10,30 @@ import { getProfitAndLossReport } from '@/lib/quickbooks-api';
  * - start_date (required): Start date in YYYY-MM-DD format
  * - end_date (required): End date in YYYY-MM-DD format
  * - accounting_method (optional): 'Accrual' or 'Cash' (default: 'Accrual')
+ * - connection_id (optional): Specific QuickBooks connection ID (uses first if not provided)
  * 
  * Example:
- * GET /api/quickbook/reports/profit-loss?start_date=2024-01-01&end_date=2024-12-31&accounting_method=Accrual
+ * GET /api/quickbook/reports/profit-loss?start_date=2024-01-01&end_date=2024-12-31&accounting_method=Accrual&connection_id=xxx
  */
 export async function GET(request: NextRequest) {
   try {
+    // Get current authenticated user
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const userId = session.user.id;
+
     const { searchParams } = new URL(request.url);
     const startDate = searchParams.get('start_date');
     const endDate = searchParams.get('end_date');
     const accountingMethod = (searchParams.get('accounting_method') ||
       'Accrual') as 'Accrual' | 'Cash';
+    const connectionId = searchParams.get('connection_id') || undefined;
 
     // Validate required parameters
     if (!startDate || !endDate) {
@@ -46,9 +60,11 @@ export async function GET(request: NextRequest) {
 
     // Get Profit & Loss report
     const report = await getProfitAndLossReport(
+      userId,
       startDate,
       endDate,
-      accountingMethod
+      accountingMethod,
+      connectionId
     );
 
     return NextResponse.json({
@@ -60,12 +76,13 @@ export async function GET(request: NextRequest) {
 
     // Handle authentication errors
     if (
-      error.message?.includes('No QuickBooks tokens') ||
+      error.message?.includes('No QuickBooks connections') ||
+      error.message?.includes('not found') ||
       error.message?.includes('re-authenticate')
     ) {
       return NextResponse.json(
         {
-          error: 'Authentication required',
+          error: 'QuickBooks connection required',
           details: error.message,
           action: 'Please authenticate at /api/quickbook/auth',
         },

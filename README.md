@@ -20,6 +20,36 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Environment Variables
+
+Copy `.env.example` to `.env.local` and fill in your values:
+
+```bash
+cp .env.example .env.local
+```
+
+### Required Variables
+
+- `DATABASE_URL` - Your PostgreSQL database connection string
+- `NEXTAUTH_SECRET` - A random secret for NextAuth (generate with `openssl rand -base64 32`)
+- `QUICKBOOKS_CLIENT_ID` - Your QuickBooks app client ID
+- `QUICKBOOKS_CLIENT_SECRET` - Your QuickBooks app client secret
+
+### Email Configuration (SMTP)
+
+For email notifications (access requests, token alerts), configure SMTP:
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_app_password
+SMTP_FROM=your_email@gmail.com
+```
+
+**📧 See [SMTP_SETUP.md](./SMTP_SETUP.md) for detailed instructions on setting up SMTP with various providers (Gmail, SendGrid, Mailgun, etc.)**
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

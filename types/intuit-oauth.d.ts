@@ -21,7 +21,7 @@ declare module 'intuit-oauth' {
 
     createToken(url: string): Promise<AuthResponse>;
     refresh(): Promise<AuthResponse>;
-    setRefreshToken(refreshToken: string): void;
+    refreshUsingToken(refresh_token: string): Promise<AuthResponse>;
     isAccessTokenValid(): boolean;
     getToken(): TokenData | null;
   }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getQuickBooksOAuthClient } from '@/lib/quickbooks';
+import { getQuickBooksOAuthClient } from '@/lib/quickbooks-oauth';
 import { saveQuickBooksTokens } from '@/lib/quickbooks-token';
+import { requireAdmin } from '@/lib/auth-helpers';
 
 /**
  * GET /api/quickbook/auth/callback
@@ -14,6 +15,22 @@ export async function GET(request: NextRequest) {
     const realmId = searchParams.get('realmId');
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
+
+    // Extract locationName and returnTo from state if they were included
+    let locationName: string | undefined;
+    let returnTo: string | undefined;
+
+    if (state?.includes('|locationName:')) {
+      const locationMatch = state.match(/\|locationName:([^|]+)/);
+      locationName = locationMatch ? locationMatch[1] : undefined;
+    }
+
+    if (state?.includes('|returnTo:')) {
+      const returnToMatch = state.match(/\|returnTo:(.+)$/);
+      returnTo = returnToMatch
+        ? decodeURIComponent(returnToMatch[1])
+        : undefined;
+    }
 
     // Handle OAuth errors
     if (error) {
@@ -33,6 +50,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Require admin role
+    let adminUser;
+    try {
+      adminUser = await requireAdmin();
+    } catch (error: any) {
+      return NextResponse.json(
+        {
+          error:
+            'Admin access required. Only admins can connect QuickBooks accounts.',
+        },
+        { status: 403 }
+      );
+    }
+
     const oauthClient = getQuickBooksOAuthClient();
 
     try {
@@ -40,12 +71,20 @@ export async function GET(request: NextRequest) {
       const authResponse = await oauthClient.createToken(request.url);
       const tokenData = authResponse.getJson();
 
+      const finalRealmId = realmId || tokenData.realmId || '';
+      if (!finalRealmId) {
+        return NextResponse.json(
+          { error: 'Realm ID is missing from OAuth response' },
+          { status: 400 }
+        );
+      }
+
       const tokens = {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in, // Typically 3600 seconds (1 hour)
         token_type: tokenData.token_type,
-        realmId: realmId || tokenData.realmId || '',
+        realmId: finalRealmId,
         refresh_token_expires_at: tokenData.x_refresh_token_expires_in
           ? Math.floor(
               (Date.now() + tokenData.x_refresh_token_expires_in * 1000) / 1000
@@ -53,11 +92,18 @@ export async function GET(request: NextRequest) {
           : undefined, // Typically 100 days
       };
 
-      // Save tokens to HTTP-only cookies
-      const response = NextResponse.redirect(
-        new URL('/api/quickbook/auth/success', request.url)
+      // Save tokens to database (admin only)
+      await saveQuickBooksTokens(
+        adminUser.id,
+        tokens,
+        locationName || undefined
       );
-      await saveQuickBooksTokens(tokens, response);
+
+      // Redirect back to original page with success parameter, or default to admin page
+      const redirectUrl = new URL(returnTo || '/admin', request.url);
+      redirectUrl.searchParams.set('qb_success', 'true');
+      redirectUrl.searchParams.set('realmId', finalRealmId);
+      const response = NextResponse.redirect(redirectUrl);
 
       return response;
     } catch (error: any) {
