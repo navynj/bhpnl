@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     
     let botInfo;
     try {
-      const response = await notion.users.me();
+      const response = await notion.users.me({});
       botInfo = {
         id: response.id,
         type: response.type,

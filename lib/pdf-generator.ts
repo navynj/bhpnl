@@ -6,6 +6,10 @@ export interface ReportData {
     Currency?: string;
     StartPeriod?: string;
     EndPeriod?: string;
+    Option?: Array<{
+      Name?: string;
+      Value?: string;
+    }>;
   };
   Rows?: {
     Row?: Array<{

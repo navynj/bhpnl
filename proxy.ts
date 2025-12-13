@@ -20,9 +20,10 @@ export async function proxy(request: NextRequest) {
   // This works properly with NextAuth v5 and handles all cookie variations
   const session = await auth();
 
-  // If no session, redirect to auth page (unless already on auth page)
+  // If no session, redirect to auth page (unless already on auth page or public pages)
   if (!session) {
-    if (pathname !== '/auth') {
+    const publicPages = ['/auth', '/eula', '/privacy'];
+    if (!publicPages.includes(pathname)) {
       const redirectUrl = new URL('/auth', request.url);
       redirectUrl.searchParams.set(
         'callbackUrl',

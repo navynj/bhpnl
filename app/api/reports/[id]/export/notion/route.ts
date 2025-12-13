@@ -235,11 +235,21 @@ export async function POST(
       });
     }
 
+    // Format page ID with hyphens for URL construction
+    const formatNotionId = (id: string): string => {
+      const cleanId = id.replace(/-/g, '');
+      if (cleanId.length !== 32) return id;
+      return `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20, 32)}`;
+    };
+
+    const formattedId = formatNotionId(response.id);
+    const notionUrl = (response as any).url || `https://www.notion.so/${formattedId}`;
+
     return NextResponse.json({
       success: true,
       message: 'Report exported to Notion successfully',
       notionPageId: response.id,
-      notionUrl: response.url,
+      notionUrl,
     });
   } catch (error: any) {
     console.error('Error exporting report to Notion:', error);

@@ -54,8 +54,9 @@ function getNotionClient(): Client & { databases: { query: (args: any) => Promis
     
     // Add the missing databases.query method if it doesn't exist
     // This is a workaround for @notionhq/client 5.4.0 which may have removed this method
-    if (!client.databases.query) {
-      (client.databases as any).query = async (args: { database_id: string; filter?: any; sorts?: any[] }) => {
+    const databasesAny = client.databases as any;
+    if (!databasesAny.query) {
+      databasesAny.query = async (args: { database_id: string; filter?: any; sorts?: any[] }) => {
         // Make a direct API call to the Notion database query endpoint
         const response = await fetch(`https://api.notion.com/v1/databases/${args.database_id}/query`, {
           method: 'POST',
@@ -353,10 +354,15 @@ export async function createReportInNotion(
   }
 
   // Extract properties from the response
-  const props = response.properties as any;
+  const responseAny = response as any;
+  const props = responseAny.properties || {};
   const startDateProp = props['Start Date']?.date?.start || startDate.toISOString().split('T')[0];
   const endDateProp = props['End Date']?.date?.start || endDate.toISOString().split('T')[0];
   const createdAtProp = props['Created At']?.date?.start || new Date().toISOString();
+
+  // Format page ID with hyphens for URL construction
+  const formattedId = formatNotionId(response.id);
+  const notionUrl = responseAny.url || `https://www.notion.so/${formattedId}`;
 
     return {
       id: response.id,
@@ -366,7 +372,7 @@ export async function createReportInNotion(
       createdAt: createdAtProp,
       updatedAt: createdAtProp,
       notionPageId: response.id,
-      notionUrl: response.url,
+      notionUrl,
       pdfUrl,
     };
   } catch (error: any) {
