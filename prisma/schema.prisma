@@ -30,6 +30,7 @@ model User {
   Session         Session[]
   userConnections UserConnection[]
   createdConnections QBConnection[] // Connections created by this admin
+  reports         Report[]
 }
 
 model Account {
@@ -94,4 +95,21 @@ model UserConnection {
   qbConnection QBConnection @relation(fields: [qbConnectionId], references: [id], onDelete: Cascade)
 
   @@unique([userId, qbConnectionId])
+}
+
+model Report {
+  id            String   @id @default(cuid())
+  userId        String
+  connectionId  String
+  startDate     DateTime @db.Date
+  endDate       DateTime @db.Date
+  duration      String   // e.g., "Last 7 days", "Last 30 days", "Custom"
+  createdAt     DateTime @default(now()) @db.Timestamptz
+  updatedAt     DateTime @updatedAt @db.Timestamptz
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([connectionId])
+  @@index([createdAt])
 }

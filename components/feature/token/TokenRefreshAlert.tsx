@@ -93,6 +93,7 @@ export function TokenRefreshAlert() {
   const expiredCount = connectionsNeedingRefresh.filter(
     (c) => c.status.accessExpired || c.status.refreshExpired
   ).length;
+
   const expiringSoonCount = connectionsNeedingRefresh.filter(
     (c) => c.status.accessExpiresSoon && !c.status.accessExpired
   ).length;
@@ -121,18 +122,6 @@ export function TokenRefreshAlert() {
               Total: {connectionsNeedingRefresh.length} connection(s) need
               attention.
             </p>
-            <div className="flex gap-2 mt-3">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSendEmail}
-                disabled={isSendingEmail}
-                isLoading={isSendingEmail}
-              >
-                <Mail className="h-4 w-4" />
-                <span className="ml-2">Send Email Alert</span>
-              </Button>
-            </div>
           </div>
         </div>
       </div>
@@ -151,9 +140,10 @@ export function TokenRefreshAlert() {
                 : conn.status.accessExpired
                 ? 'Access Token Expired'
                 : 'Expires Soon';
-              const statusColor = conn.status.refreshExpired || conn.status.accessExpired
-                ? 'text-red-600'
-                : 'text-orange-600';
+              const statusColor =
+                conn.status.refreshExpired || conn.status.accessExpired
+                  ? 'text-red-600'
+                  : 'text-orange-600';
 
               return (
                 <div
@@ -173,4 +163,3 @@ export function TokenRefreshAlert() {
     </div>
   );
 }
-

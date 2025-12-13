@@ -162,7 +162,7 @@ const UserPage = () => {
                 {connection.hasAccess ? (
                   <Button variant="outline" size="sm" asChild>
                     <Link
-                      href={`/reports?connectionId=${connection.id}`}
+                      href={`/report/${connection.id}`}
                       className="flex items-center gap-2"
                     >
                       Access
@@ -170,20 +170,9 @@ const UserPage = () => {
                     </Link>
                   </Button>
                 ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleRequestAccess(connection.id)}
-                    disabled={
-                      requestingIds.has(connection.id) ||
-                      requestedIds.has(connection.id)
-                    }
-                    isLoading={requestingIds.has(connection.id)}
-                  >
-                    {requestedIds.has(connection.id)
-                      ? 'Request Sent'
-                      : 'Request Access'}
-                  </Button>
+                  <p className="text-sm text-muted-foreground">
+                    Contact an admin to request access
+                  </p>
                 )}
               </div>
             </div>

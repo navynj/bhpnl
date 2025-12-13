@@ -296,6 +296,8 @@ export async function getProfitAndLossReport(
     start_date: startDate,
     end_date: endDate,
     accounting_method: accountingMethod,
+    // Request more detailed data
+    minorversion: '65', // Use a recent API version
   });
 
   return quickBooksApiRequest<{
