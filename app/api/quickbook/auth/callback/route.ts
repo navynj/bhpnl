@@ -33,21 +33,31 @@ export async function GET(request: NextRequest) {
     }
 
     // Handle OAuth errors
+    // Security: Use redirect instead of JSON to prevent sensitive data in Referer header
     if (error) {
-      return NextResponse.json(
-        {
-          error: 'OAuth authorization failed',
-          error_description: errorDescription || error,
-        },
-        { status: 400 }
-      );
+      const errorRedirectUrl = new URL('/admin', request.url);
+      errorRedirectUrl.searchParams.set('qb_error', 'true');
+      errorRedirectUrl.searchParams.set('error', error);
+      if (errorDescription) {
+        errorRedirectUrl.searchParams.set('error_description', errorDescription);
+      }
+      const errorResponse = NextResponse.redirect(errorRedirectUrl);
+      // Security: Disable caching for sensitive OAuth callback
+      errorResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      errorResponse.headers.set('Pragma', 'no-cache');
+      errorResponse.headers.set('Expires', '0');
+      return errorResponse;
     }
 
     if (!code) {
-      return NextResponse.json(
-        { error: 'Authorization code is missing' },
-        { status: 400 }
-      );
+      const errorRedirectUrl = new URL('/admin', request.url);
+      errorRedirectUrl.searchParams.set('qb_error', 'true');
+      errorRedirectUrl.searchParams.set('error', 'missing_code');
+      const errorResponse = NextResponse.redirect(errorRedirectUrl);
+      errorResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      errorResponse.headers.set('Pragma', 'no-cache');
+      errorResponse.headers.set('Expires', '0');
+      return errorResponse;
     }
 
     // Require admin role
@@ -55,13 +65,15 @@ export async function GET(request: NextRequest) {
     try {
       adminUser = await requireAdmin();
     } catch (error: any) {
-      return NextResponse.json(
-        {
-          error:
-            'Admin access required. Only admins can connect QuickBooks accounts.',
-        },
-        { status: 403 }
-      );
+      // Security: Use redirect instead of JSON
+      const errorRedirectUrl = new URL('/admin', request.url);
+      errorRedirectUrl.searchParams.set('qb_error', 'true');
+      errorRedirectUrl.searchParams.set('error', 'admin_required');
+      const errorResponse = NextResponse.redirect(errorRedirectUrl);
+      errorResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      errorResponse.headers.set('Pragma', 'no-cache');
+      errorResponse.headers.set('Expires', '0');
+      return errorResponse;
     }
 
     const oauthClient = getQuickBooksOAuthClient();
@@ -73,10 +85,14 @@ export async function GET(request: NextRequest) {
 
       const finalRealmId = realmId || tokenData.realmId || '';
       if (!finalRealmId) {
-        return NextResponse.json(
-          { error: 'Realm ID is missing from OAuth response' },
-          { status: 400 }
-        );
+        const errorRedirectUrl = new URL('/admin', request.url);
+        errorRedirectUrl.searchParams.set('qb_error', 'true');
+        errorRedirectUrl.searchParams.set('error', 'missing_realm_id');
+        const errorResponse = NextResponse.redirect(errorRedirectUrl);
+        errorResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        errorResponse.headers.set('Pragma', 'no-cache');
+        errorResponse.headers.set('Expires', '0');
+        return errorResponse;
       }
 
       const tokens = {
@@ -99,31 +115,68 @@ export async function GET(request: NextRequest) {
         locationName || undefined
       );
 
-      // Redirect back to original page with success parameter, or default to admin page
-      const redirectUrl = new URL(returnTo || '/admin', request.url);
+      // Security: Validate returnTo URL to prevent open redirect attacks
+      let safeReturnTo = '/admin';
+      if (returnTo) {
+        try {
+          const returnToUrl = new URL(returnTo, request.url);
+          // Only allow redirects to same origin
+          if (returnToUrl.origin === new URL(request.url).origin) {
+            // Only allow relative paths (no external redirects)
+            if (returnToUrl.pathname.startsWith('/')) {
+              safeReturnTo = returnToUrl.pathname + returnToUrl.search;
+            }
+          }
+        } catch {
+          // Invalid URL, use default
+        }
+      }
+
+      // Security: Use 302 redirect (not HTML response) to prevent sensitive data in Referer header
+      // QuickBooks requirement: endpoints receiving sensitive info must use 302 redirect, not HTML
+      const redirectUrl = new URL(safeReturnTo, request.url);
       redirectUrl.searchParams.set('qb_success', 'true');
-      redirectUrl.searchParams.set('realmId', finalRealmId);
-      const response = NextResponse.redirect(redirectUrl);
+      // Note: realmId is not sensitive after OAuth completion, but we keep it minimal
+      const response = NextResponse.redirect(redirectUrl, { status: 302 });
+      
+      // Security: Disable caching for sensitive OAuth callback
+      response.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      response.headers.set('Pragma', 'no-cache');
+      response.headers.set('Expires', '0');
 
       return response;
     } catch (error: any) {
-      console.error('Error exchanging authorization code for tokens:', error);
-      return NextResponse.json(
-        {
-          error: 'Failed to exchange authorization code for tokens',
-          details: error.message || 'Unknown error',
-        },
-        { status: 500 }
-      );
+      // Security: Don't log sensitive token information
+      console.error('Error exchanging authorization code for tokens:', {
+        message: error.message,
+        // Explicitly do NOT log: code, tokens, realmId, or any sensitive data
+      });
+      
+      // Security: Use redirect instead of JSON
+      const errorRedirectUrl = new URL('/admin', request.url);
+      errorRedirectUrl.searchParams.set('qb_error', 'true');
+      errorRedirectUrl.searchParams.set('error', 'token_exchange_failed');
+      const errorResponse = NextResponse.redirect(errorRedirectUrl);
+      errorResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      errorResponse.headers.set('Pragma', 'no-cache');
+      errorResponse.headers.set('Expires', '0');
+      return errorResponse;
     }
   } catch (error: any) {
-    console.error('OAuth callback error:', error);
-    return NextResponse.json(
-      {
-        error: 'OAuth callback failed',
-        details: error.message || 'Unknown error',
-      },
-      { status: 500 }
-    );
+    // Security: Don't log sensitive information
+    console.error('OAuth callback error:', {
+      message: error.message,
+      // Explicitly do NOT log: code, tokens, realmId, or any sensitive data
+    });
+    
+    // Security: Use redirect instead of JSON
+    const errorRedirectUrl = new URL('/admin', request.url);
+    errorRedirectUrl.searchParams.set('qb_error', 'true');
+    errorRedirectUrl.searchParams.set('error', 'callback_failed');
+    const errorResponse = NextResponse.redirect(errorRedirectUrl);
+    errorResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    errorResponse.headers.set('Pragma', 'no-cache');
+    errorResponse.headers.set('Expires', '0');
+    return errorResponse;
   }
 }

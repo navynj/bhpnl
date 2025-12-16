@@ -1,87 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { AlertTriangle, X, Mail, RefreshCw } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { fetchData } from '@/lib/fetch';
-import { toast } from 'sonner';
+import { AlertTriangle } from 'lucide-react';
+import { ConnectionStatus } from './ActionButtonsArea';
 
-interface ConnectionStatus {
-  id: string;
-  locationName: string | null;
-  realmId: string;
-  expiresAt: string;
-  refreshTokenExpiresAt: string | null;
-  status: {
-    accessExpired: boolean;
-    refreshExpired: boolean;
-    accessExpiresSoon: boolean;
-    needsRefresh: boolean;
-  };
-  admin?: {
-    id: string;
-    name: string | null;
-    email: string | null;
-  };
+interface TokenRefreshAlertProps {
+  connectionsNeedingRefresh: ConnectionStatus[];
+  isChecking: boolean;
 }
 
-export function TokenRefreshAlert() {
-  const [connectionsNeedingRefresh, setConnectionsNeedingRefresh] = useState<
-    ConnectionStatus[]
-  >([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isChecking, setIsChecking] = useState(true);
-  const [isSendingEmail, setIsSendingEmail] = useState(false);
-
-  // Check token status on mount and periodically
-  useEffect(() => {
-    const checkTokens = async () => {
-      try {
-        setIsChecking(true);
-        const data = await fetchData(
-          'quickbook/admin/check-tokens',
-          setIsChecking
-        );
-
-        if (data?.success) {
-          setConnectionsNeedingRefresh(data.connectionsNeedingRefresh || []);
-        }
-      } catch (error) {
-        console.error('Failed to check token status:', error);
-      }
-    };
-
-    checkTokens();
-
-    // Check every 5 minutes
-    const interval = setInterval(checkTokens, 5 * 60 * 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleSendEmail = async () => {
-    try {
-      setIsSendingEmail(true);
-      const data = await fetchData(
-        'quickbook/admin/check-tokens?sendEmail=true',
-        setIsSendingEmail
-      );
-
-      if (data?.success) {
-        if (data.emailSent) {
-          toast.success('Email alert sent to admin(s) successfully');
-        } else {
-          toast.warning(
-            'Email alert attempted but may not have been sent. Check email configuration.'
-          );
-        }
-      }
-    } catch (error) {
-      console.error('Failed to send email alert:', error);
-      toast.error('Failed to send email alert');
-    }
-  };
-
+export function TokenRefreshAlert({
+  connectionsNeedingRefresh,
+  isChecking,
+}: TokenRefreshAlertProps) {
   if (isChecking) {
     return null; // Don't show anything while checking
   }

@@ -1,49 +1,31 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { Button } from '../../ui/Button';
 import { fetchData } from '@/lib/fetch';
-import { toast } from 'sonner';
 import { CheckCircle2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { toast } from 'sonner';
+import { Button } from '../../ui/Button';
 
-const RefreshTokenButton = () => {
+interface RefreshTokenButtonProps {
+  isTokensNeedRefresh: boolean;
+  setIsTokensNeedRefresh: React.Dispatch<React.SetStateAction<boolean | null>>;
+  isChecking: boolean;
+  totalConnections: number;
+}
+
+const RefreshTokenButton = ({
+  isTokensNeedRefresh,
+  setIsTokensNeedRefresh,
+  isChecking,
+  totalConnections,
+}: RefreshTokenButtonProps) => {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
-  const [isCheckingStatus, setIsCheckingStatus] = useState(true);
-  const [tokensNeedRefresh, setTokensNeedRefresh] = useState<boolean | null>(
-    null
-  );
-  const [totalConnections, setTotalConnections] = useState(0);
-
-  // Check token status on mount
-  useEffect(() => {
-    const checkTokenStatus = async () => {
-      try {
-        setIsCheckingStatus(true);
-        const data = await fetchData('quickbook/admin/check-tokens');
-
-        if (data?.success) {
-          const needsRefresh =
-            (data.connectionsNeedingRefresh?.length || 0) > 0;
-          setTokensNeedRefresh(needsRefresh);
-          setTotalConnections(data.totalConnections || 0);
-        }
-      } catch (error) {
-        console.error('Failed to check token status:', error);
-        // On error, assume we should enable the button
-        setTokensNeedRefresh(null);
-      } finally {
-        setIsCheckingStatus(false);
-      }
-    };
-
-    checkTokenStatus();
-  }, []);
 
   const refreshToken = async () => {
     // If we know tokens don't need refresh, show message immediately
-    if (tokensNeedRefresh === false) {
+    if (isTokensNeedRefresh === false) {
       toast.info(
         `All tokens are valid and no refresh is needed. Tokens are only refreshed if they are expired or expiring within 5 minutes.`,
         {
@@ -93,14 +75,14 @@ const RefreshTokenButton = () => {
 
       // Update status after refresh
       if (refreshedCount === 0 && errorCount === 0) {
-        setTokensNeedRefresh(false);
+        setIsTokensNeedRefresh(false);
       } else if (refreshedCount > 0) {
         // Re-check status after refresh
         const statusData = await fetchData('quickbook/admin/check-tokens');
         if (statusData?.success) {
           const stillNeedsRefresh =
             (statusData.connectionsNeedingRefresh?.length || 0) > 0;
-          setTokensNeedRefresh(stillNeedsRefresh);
+          setIsTokensNeedRefresh(stillNeedsRefresh);
         }
       }
 
@@ -110,16 +92,16 @@ const RefreshTokenButton = () => {
   };
 
   // Show status indicator
-  const showValidStatus = tokensNeedRefresh === false && !isCheckingStatus;
+  const showValidStatus = isTokensNeedRefresh === false && !isChecking;
 
   return (
     <div className="flex items-center gap-2">
       <Button
         onClick={refreshToken}
-        disabled={isLoading || isCheckingStatus || !tokensNeedRefresh}
+        disabled={isLoading || isChecking || !isTokensNeedRefresh}
         isLoading={isLoading}
         title={
-          tokensNeedRefresh === false
+          isTokensNeedRefresh === false
             ? 'All tokens are valid. No refresh needed.'
             : undefined
         }

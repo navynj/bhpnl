@@ -291,6 +291,7 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
                     'w-full justify-start text-left font-normal',
                     !startDate && 'text-muted-foreground'
                   )}
+                  disabled={isGenerating}
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
                   {startDate ? format(startDate, 'PPP') : 'Pick a date'}
@@ -317,6 +318,7 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
                     'w-full justify-start text-left font-normal',
                     !endDate && 'text-muted-foreground'
                   )}
+                  disabled={isGenerating}
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
                   {endDate ? format(endDate, 'PPP') : 'Pick a date'}

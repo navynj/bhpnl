@@ -12,6 +12,7 @@
 
 import { prisma } from '@/prisma/client';
 import { NextResponse } from 'next/server';
+import { encrypt, decrypt } from './encryption';
 
 // ============================================================================
 // Types
@@ -80,12 +81,19 @@ export async function saveQuickBooksTokens(
   let qbConnection: QBConnectionData;
 
   if (existingConnection) {
+    // Encrypt sensitive data before storing
+    // Note: accessToken is short-lived and not required to be encrypted by QuickBooks,
+    // but refreshToken and realmId must be encrypted
+    const encryptedRefreshToken = encrypt(tokens.refresh_token);
+    const encryptedRealmId = encrypt(tokens.realmId);
+
     // Update existing connection
     qbConnection = await prisma.qBConnection.update({
       where: { id: existingConnection.id },
       data: {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: tokens.access_token, // Short-lived, not encrypted
+        refreshToken: encryptedRefreshToken, // Encrypted as per QuickBooks requirements
+        realmId: encryptedRealmId, // Encrypted as per QuickBooks requirements
         expiresAt,
         refreshTokenExpiresAt: refreshExpiresAt,
         locationName: locationName || existingConnection.locationName,
@@ -116,12 +124,16 @@ export async function saveQuickBooksTokens(
       update: {},
     });
   } else {
+    // Encrypt sensitive data before storing
+    const encryptedRefreshToken = encrypt(tokens.refresh_token);
+    const encryptedRealmId = encrypt(tokens.realmId);
+
     // Create new connection
     qbConnection = await prisma.qBConnection.create({
       data: {
-        realmId: tokens.realmId,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        realmId: encryptedRealmId, // Encrypted as per QuickBooks requirements
+        accessToken: tokens.access_token, // Short-lived, not encrypted
+        refreshToken: encryptedRefreshToken, // Encrypted as per QuickBooks requirements
         expiresAt,
         refreshTokenExpiresAt: refreshExpiresAt,
         locationName: locationName || null,
@@ -144,7 +156,12 @@ export async function saveQuickBooksTokens(
     });
   }
 
-  return qbConnection;
+  // Decrypt sensitive data before returning
+  return {
+    ...qbConnection,
+    realmId: decrypt(qbConnection.realmId),
+    refreshToken: decrypt(qbConnection.refreshToken),
+  };
 }
 
 // ============================================================================
@@ -153,30 +170,49 @@ export async function saveQuickBooksTokens(
 
 /**
  * Get QuickBooks tokens for a user and realmId
+ * Note: realmId comparison requires decryption
  */
 export async function getQuickBooksTokens(
   userId: string,
   realmId: string,
   locationName?: string | null
 ): Promise<QBConnectionData | null> {
-  const userConnection = await prisma.userConnection.findFirst({
-    where: {
-      userId,
-      qbConnection: {
-        realmId,
-        ...(locationName !== undefined && { locationName }),
-      },
-    },
+  // Get all connections for the user and decrypt to find matching realmId
+  const userConnections = await prisma.userConnection.findMany({
+    where: { userId },
     include: {
       qbConnection: true,
     },
   });
 
-  return userConnection?.qbConnection || null;
+  // Find connection with matching realmId (decrypt to compare)
+  for (const userConnection of userConnections) {
+    const connection = userConnection.qbConnection;
+    
+    // Decrypt realmId for comparison
+    const decryptedRealmId = decrypt(connection.realmId);
+    
+    if (decryptedRealmId === realmId) {
+      // Check locationName if provided
+      if (locationName !== undefined && connection.locationName !== locationName) {
+        continue;
+      }
+      
+      // Return connection with decrypted values
+      return {
+        ...connection,
+        realmId: decryptedRealmId,
+        refreshToken: decrypt(connection.refreshToken),
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
  * Get all QuickBooks connections for a user
+ * Returns connections with decrypted sensitive data
  */
 export async function getUserQuickBooksConnections(
   userId: string
@@ -198,11 +234,17 @@ export async function getUserQuickBooksConnections(
     },
   });
 
-  return userConnections.map((uc) => uc.qbConnection);
+  // Decrypt sensitive data before returning
+  return userConnections.map((uc) => ({
+    ...uc.qbConnection,
+    realmId: decrypt(uc.qbConnection.realmId),
+    refreshToken: decrypt(uc.qbConnection.refreshToken),
+  }));
 }
 
 /**
  * Get a specific QuickBooks connection by ID (for the user)
+ * Returns connection with decrypted sensitive data
  */
 export async function getQuickBooksConnectionById(
   userId: string,
@@ -220,7 +262,16 @@ export async function getQuickBooksConnectionById(
     },
   });
 
-  return userConnection?.qbConnection || null;
+  if (!userConnection) {
+    return null;
+  }
+
+  // Decrypt sensitive data before returning
+  return {
+    ...userConnection.qbConnection,
+    realmId: decrypt(userConnection.qbConnection.realmId),
+    refreshToken: decrypt(userConnection.qbConnection.refreshToken),
+  };
 }
 
 // ============================================================================
@@ -229,6 +280,7 @@ export async function getQuickBooksConnectionById(
 
 /**
  * Update QuickBooks tokens in database
+ * Encrypts refreshToken if provided
  */
 export async function updateQuickBooksTokens(
   connectionId: string,
@@ -239,10 +291,23 @@ export async function updateQuickBooksTokens(
     refreshTokenExpiresAt: Date | null;
   }>
 ): Promise<QBConnectionData> {
-  return prisma.qBConnection.update({
+  // Encrypt refreshToken if provided
+  const updateData: any = { ...tokens };
+  if (tokens.refreshToken) {
+    updateData.refreshToken = encrypt(tokens.refreshToken);
+  }
+
+  const updated = await prisma.qBConnection.update({
     where: { id: connectionId },
-    data: tokens,
+    data: updateData,
   });
+
+  // Decrypt sensitive data before returning
+  return {
+    ...updated,
+    realmId: decrypt(updated.realmId),
+    refreshToken: decrypt(updated.refreshToken),
+  };
 }
 
 // ============================================================================
@@ -251,6 +316,7 @@ export async function updateQuickBooksTokens(
 
 /**
  * Check if access token is expired or will expire soon (within 5 minutes)
+ * Note: connection should have decrypted data (from get functions)
  */
 export function isAccessTokenExpired(connection: QBConnectionData): boolean {
   const now = new Date();

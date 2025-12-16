@@ -95,14 +95,18 @@ export async function POST(request: NextRequest) {
       message: 'Tokens refreshed successfully',
     });
   } catch (error: any) {
-    console.error('Error refreshing access token:', error);
+    // Security: Don't log sensitive token information
+    console.error('Error refreshing access token:', {
+      message: error.message,
+      // Explicitly do NOT log: tokens, connectionId details, or any sensitive data
+    });
     
     // Handle specific error cases
     if (error.message?.includes('invalid_grant') || error.message?.includes('refresh_token')) {
       return NextResponse.json(
         { 
           error: 'Refresh token is invalid or expired. User needs to reauthorize.',
-          details: error.message
+          // Don't expose detailed error message to client
         },
         { status: 401 }
       );
@@ -111,7 +115,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { 
         error: 'Failed to refresh access token',
-        details: error.message || 'Unknown error'
+        // Don't expose detailed error message to client
       },
       { status: 500 }
     );

@@ -5,7 +5,9 @@ import { requireAdmin } from '@/lib/auth-helpers';
 import {
   isAccessTokenExpired,
   isRefreshTokenExpired,
+  updateQuickBooksTokens,
 } from '@/lib/quickbooks-token';
+import { decrypt } from '@/lib/encryption';
 
 /**
  * POST /api/quickbook/admin/refresh-tokens
@@ -53,8 +55,18 @@ export async function POST(request: NextRequest) {
 
     for (const connection of connections) {
       try {
+        // Decrypt refresh token for use
+        const decryptedRefreshToken = decrypt(connection.refreshToken);
+        
+        // Create connection object with decrypted data for status checks
+        const decryptedConnection = {
+          ...connection,
+          refreshToken: decryptedRefreshToken,
+          realmId: decrypt(connection.realmId),
+        };
+
         // Check if refresh token is expired
-        if (!force && isRefreshTokenExpired(connection)) {
+        if (!force && isRefreshTokenExpired(decryptedConnection)) {
           errors.push({
             connectionId: connection.id,
             error: 'Refresh token is expired. Manual reauthorization required.',
@@ -63,14 +75,14 @@ export async function POST(request: NextRequest) {
         }
 
         // Check if access token needs refresh
-        if (!force && !isAccessTokenExpired(connection)) {
+        if (!force && !isAccessTokenExpired(decryptedConnection)) {
           skipped.push(connection.id);
           continue;
         }
 
         // Refresh the token
         const authResponse = await oauthClient.refreshUsingToken(
-          connection.refreshToken
+          decryptedRefreshToken
         );
         const tokenData = authResponse.getJson();
 
@@ -82,19 +94,17 @@ export async function POST(request: NextRequest) {
           ? new Date(Date.now() + tokenData.x_refresh_token_expires_in * 1000)
           : connection.refreshTokenExpiresAt;
 
-        // Update tokens in database
-        await prisma.qBConnection.update({
-          where: { id: connection.id },
-          data: {
-            accessToken: tokenData.access_token,
-            refreshToken: tokenData.refresh_token,
-            expiresAt,
-            refreshTokenExpiresAt: refreshExpiresAt,
-          },
+        // Update tokens in database (encryption handled by updateQuickBooksTokens)
+        await updateQuickBooksTokens(connection.id, {
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          expiresAt,
+          refreshTokenExpiresAt: refreshExpiresAt,
         });
 
         refreshed.push(connection.id);
       } catch (error: any) {
+        // Security: Don't log sensitive token information
         errors.push({
           connectionId: connection.id,
           error: error.message || 'Unknown error',
@@ -117,11 +127,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.error('Error refreshing tokens:', error);
+    // Security: Don't log sensitive token information
+    console.error('Error refreshing tokens:', {
+      message: error.message,
+      // Explicitly do NOT log: tokens, connection details, or any sensitive data
+    });
     return NextResponse.json(
       {
         error: 'Failed to refresh tokens',
-        details: error.message || 'Unknown error',
+        // Don't expose detailed error message to client
       },
       { status: 500 }
     );
@@ -141,7 +155,7 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         locationName: true,
-        realmId: true,
+        realmId: true, // This is encrypted, but we'll decrypt for status checks
         expiresAt: true,
         refreshTokenExpiresAt: true,
         createdAt: true,
@@ -164,6 +178,9 @@ export async function GET(request: NextRequest) {
 
     const connectionsWithStatus = connections.map(
       (conn: (typeof connections)[number]) => {
+        // Decrypt realmId for display (it's not sensitive after connection is established)
+        const decryptedRealmId = decrypt(conn.realmId);
+        
         const now = new Date();
         const accessExpired = conn.expiresAt <= now;
         const refreshExpired = conn.refreshTokenExpiresAt
@@ -174,6 +191,7 @@ export async function GET(request: NextRequest) {
 
         return {
           ...conn,
+          realmId: decryptedRealmId, // Return decrypted for display
           status: {
             accessExpired,
             refreshExpired,
@@ -196,11 +214,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.error('Error fetching token status:', error);
+    // Security: Don't log sensitive token information
+    console.error('Error fetching token status:', {
+      message: error.message,
+      // Explicitly do NOT log: tokens, connection details, or any sensitive data
+    });
     return NextResponse.json(
       {
         error: 'Failed to fetch token status',
-        details: error.message || 'Unknown error',
+        // Don't expose detailed error message to client
       },
       { status: 500 }
     );

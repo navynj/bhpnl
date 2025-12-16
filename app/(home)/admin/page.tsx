@@ -6,6 +6,7 @@ import { userColumns } from '@/components/feature/user/userColumns';
 import { DataTable } from '@/components/ui/DataTable';
 import { requireAdmin } from '@/lib/auth-helpers';
 import { prisma } from '@/prisma/client';
+import ActionButtonsArea from '@/components/feature/token/ActionButtonsArea';
 
 const AdminPage = async () => {
   // Ensure user is admin
@@ -29,11 +30,7 @@ const AdminPage = async () => {
   return (
     <div className="space-y-4">
       <QuickBooksSuccessToast />
-      <TokenRefreshAlert />
-      <div className="flex gap-2">
-        <ConnectQuickBooksButton />
-        <RefreshTokenButton />
-      </div>
+      <ActionButtonsArea />
       <DataTable columns={userColumns} data={users} />
     </div>
   );

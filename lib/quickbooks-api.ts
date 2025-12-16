@@ -224,9 +224,15 @@ export async function quickBooksApiRequest<T = any>(
     });
   };
 
+  // Helper function to extract intuit_tid from response headers
+  const getIntuitTid = (response: Response): string | undefined => {
+    return response.headers.get('intuit_tid') || response.headers.get('intuit-tid') || undefined;
+  };
+
   // First attempt
   let response = await makeRequest(accessToken);
   let hasRetried = false;
+  let intuitTid: string | undefined = getIntuitTid(response);
 
   // If 401 Unauthorized, try refreshing token and retry once (only once to prevent infinite loop)
   if (response.status === 401 && !hasRetried) {
@@ -238,34 +244,64 @@ export async function quickBooksApiRequest<T = any>(
       
       // Retry with new token (only once)
       response = await makeRequest(updatedConnection.accessToken);
+      intuitTid = getIntuitTid(response); // Update intuit_tid from retry response
       
       // If retry also returns 401, throw error immediately (don't retry again)
       if (response.status === 401) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          `QuickBooks API error: 401 Unauthorized after token refresh. ${
-            errorData.fault?.error?.[0]?.message || 'Token may be invalid or expired. Please re-authenticate.'
-          }`
-        );
+        const errorMessage = `QuickBooks API error: 401 Unauthorized after token refresh. ${
+          errorData.fault?.error?.[0]?.message || 'Token may be invalid or expired. Please re-authenticate.'
+        }`;
+        
+        // Log error with intuit_tid for troubleshooting
+        console.error('QuickBooks API error:', {
+          status: 401,
+          endpoint,
+          realmId,
+          intuit_tid: intuitTid,
+          error: errorMessage,
+        });
+        
+        throw new Error(intuitTid ? `${errorMessage} [intuit_tid: ${intuitTid}]` : errorMessage);
       }
     } catch (refreshError: any) {
       // If refresh fails, throw the original 401 error with refresh error details
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        `QuickBooks API error: 401 Unauthorized. Token refresh failed: ${refreshError.message}. ${
-          errorData.fault?.error?.[0]?.message || 'Please re-authenticate.'
-        }`
-      );
+      const errorMessage = `QuickBooks API error: 401 Unauthorized. Token refresh failed: ${refreshError.message}. ${
+        errorData.fault?.error?.[0]?.message || 'Please re-authenticate.'
+      }`;
+      
+      // Log error with intuit_tid for troubleshooting
+      console.error('QuickBooks API error:', {
+        status: 401,
+        endpoint,
+        realmId,
+        intuit_tid: intuitTid,
+        error: errorMessage,
+        refreshError: refreshError.message,
+      });
+      
+      throw new Error(intuitTid ? `${errorMessage} [intuit_tid: ${intuitTid}]` : errorMessage);
     }
   }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      `QuickBooks API error: ${response.status} ${response.statusText}. ${
-        errorData.fault?.error?.[0]?.message || 'Unknown error'
-      }`
-    );
+    const errorMessage = `QuickBooks API error: ${response.status} ${response.statusText}. ${
+      errorData.fault?.error?.[0]?.message || 'Unknown error'
+    }`;
+    
+    // Log error with intuit_tid for troubleshooting
+    console.error('QuickBooks API error:', {
+      status: response.status,
+      statusText: response.statusText,
+      endpoint,
+      realmId,
+      intuit_tid: intuitTid,
+      error: errorMessage,
+    });
+    
+    throw new Error(intuitTid ? `${errorMessage} [intuit_tid: ${intuitTid}]` : errorMessage);
   }
 
   return response.json();

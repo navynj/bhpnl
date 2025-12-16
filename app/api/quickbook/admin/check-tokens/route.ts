@@ -6,6 +6,7 @@ import {
   isAccessTokenExpired,
   isRefreshTokenExpired,
 } from '@/lib/quickbooks-token';
+import { decrypt } from '@/lib/encryption';
 
 /**
  * GET /api/quickbook/admin/check-tokens
@@ -68,6 +69,9 @@ export async function GET(request: NextRequest) {
 
     const connectionsNeedingRefresh = connections
       .map((conn: typeof connections[number]): ConnectionWithStatus => {
+        // Decrypt realmId for display
+        const decryptedRealmId = decrypt(conn.realmId);
+        
         const now = new Date();
         const accessExpired = conn.expiresAt <= now;
         const refreshExpired = conn.refreshTokenExpiresAt
@@ -78,6 +82,7 @@ export async function GET(request: NextRequest) {
 
         return {
           ...conn,
+          realmId: decryptedRealmId, // Return decrypted for display
           status: {
             accessExpired,
             refreshExpired,
@@ -149,11 +154,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.error('Error checking token status:', error);
+    // Security: Don't log sensitive token information
+    console.error('Error checking token status:', {
+      message: error.message,
+      // Explicitly do NOT log: tokens, connection details, or any sensitive data
+    });
     return NextResponse.json(
       {
         error: 'Failed to check token status',
-        details: error.message || 'Unknown error',
+        // Don't expose detailed error message to client
       },
       { status: 500 }
     );
