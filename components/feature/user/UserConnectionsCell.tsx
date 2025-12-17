@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import {
@@ -50,18 +51,56 @@ export function UserConnectionsCell({
   >([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isFetchingConnections, setIsFetchingConnections] = useState(false);
-
-  // Optimistic state for user connections (just track IDs)
-  const [userConnectionIds, setUserConnectionIds] = useState<Set<string>>(
-    () => new Set(user.userConnections?.map((uc) => uc.qbConnectionId) || [])
+  // Track loading state for individual connections
+  const [loadingConnectionIds, setLoadingConnectionIds] = useState<Set<string>>(
+    new Set()
   );
 
-  // Sync optimistic state when user prop changes
+  // Optimistic state for user connections (just track IDs)
+  const initialConnectionIds = new Set(
+    user.userConnections?.map((uc) => uc.qbConnectionId) || []
+  );
+  const [userConnectionIds, setUserConnectionIds] = useState<Set<string>>(
+    initialConnectionIds
+  );
+  
+  // Track if we have pending optimistic updates to prevent overwriting
+  const [hasPendingUpdates, setHasPendingUpdates] = useState(false);
+  
+  // Use ref to track the last synced server state to avoid unnecessary updates
+  const lastSyncedServerIdsRef = useRef<string>(
+    Array.from(initialConnectionIds).sort().join(',')
+  );
+  // Use ref to track current optimistic state to avoid dependency issues
+  const currentConnectionIdsRef = useRef<Set<string>>(initialConnectionIds);
+
+  // Sync optimistic state when user prop changes, but only if there are no pending updates
   useEffect(() => {
-    setUserConnectionIds(
-      new Set(user.userConnections?.map((uc) => uc.qbConnectionId) || [])
-    );
-  }, [user.userConnections]);
+    // Only sync from server data if we don't have pending optimistic updates
+    if (!hasPendingUpdates && loadingConnectionIds.size === 0) {
+      const serverConnectionIds = new Set(
+        user.userConnections?.map((uc) => uc.qbConnectionId) || []
+      );
+      const serverIds = Array.from(serverConnectionIds).sort().join(',');
+      const currentIds = Array.from(currentConnectionIdsRef.current).sort().join(',');
+      
+      // Only update if:
+      // 1. Server data is different from what we last synced
+      // 2. Current state doesn't match server data (meaning we need to sync)
+      // This prevents overwriting optimistic updates that match the server state
+      if (serverIds !== lastSyncedServerIdsRef.current && serverIds !== currentIds) {
+        flushSync(() => {
+          setUserConnectionIds(serverConnectionIds);
+          currentConnectionIdsRef.current = serverConnectionIds;
+        });
+        lastSyncedServerIdsRef.current = serverIds;
+      } else if (serverIds === currentIds && serverIds !== lastSyncedServerIdsRef.current) {
+        // If current state matches server data but ref doesn't, just update the ref
+        // This means our optimistic update was correct and server confirmed it
+        lastSyncedServerIdsRef.current = serverIds;
+      }
+    }
+  }, [user.userConnections, hasPendingUpdates, loadingConnectionIds.size]);
 
   // Fetch available connections (created by current admin)
   useEffect(() => {
@@ -94,18 +133,31 @@ export function UserConnectionsCell({
   ) => {
     // Optimistic update: update UI immediately
     const previousConnectionIds = new Set(userConnectionIds);
-    setUserConnectionIds((prev) => {
-      const next = new Set(prev);
-      if (grant) {
-        next.add(connectionId);
-      } else {
-        next.delete(connectionId);
-      }
-      return next;
+    
+    // Calculate new state immediately
+    const nextConnectionIds = new Set(userConnectionIds);
+    if (grant) {
+      nextConnectionIds.add(connectionId);
+    } else {
+      nextConnectionIds.delete(connectionId);
+    }
+    
+    // Update state synchronously for immediate UI feedback
+    flushSync(() => {
+      setUserConnectionIds(nextConnectionIds);
+      currentConnectionIdsRef.current = nextConnectionIds;
     });
+    // Update ref immediately to reflect optimistic state
+    lastSyncedServerIdsRef.current = Array.from(nextConnectionIds).sort().join(',');
+
+    // Mark that we have pending optimistic updates
+    setHasPendingUpdates(true);
+    
+    // Set loading state for this specific connection
+    setLoadingConnectionIds((prev) => new Set(prev).add(connectionId));
+    setIsLoading(true);
 
     try {
-      setIsLoading(true);
       const url = `/api/quickbook/connections/${connectionId}/grant`;
       const method = grant ? 'POST' : 'DELETE';
 
@@ -130,21 +182,51 @@ export function UserConnectionsCell({
         throw new Error('Failed to update connection');
       }
 
+      // Optimistic update succeeded, keep the UI state
       toast.success(
         grant
           ? 'Connection granted successfully'
           : 'Connection revoked successfully'
       );
-      // Refresh the page to update the data
-      router.refresh();
-      setIsLoading(false);
-      onUpdate?.();
+      
+      // Ref is already updated in the optimistic update above (line 137)
+      // The ref now matches our optimistic state, so when router.refresh() runs
+      // and server data comes back, useEffect will see that current state matches
+      // server state and won't overwrite it
     } catch (error) {
       // Revert optimistic update on error
-      setUserConnectionIds(previousConnectionIds);
+      flushSync(() => {
+        setUserConnectionIds(previousConnectionIds);
+        currentConnectionIdsRef.current = previousConnectionIds;
+      });
+      // Also revert the ref
+      lastSyncedServerIdsRef.current = Array.from(previousConnectionIds).sort().join(',');
       const message =
         error instanceof Error ? error.message : 'Something went wrong';
       toast.error(message);
+    } finally {
+      // Clear loading state for this connection
+      setLoadingConnectionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(connectionId);
+        const hasMoreLoading = next.size > 0;
+        
+        // If no more connections are loading, we can safely refresh
+        if (!hasMoreLoading) {
+          // Use flushSync to ensure state update happens before router.refresh()
+          flushSync(() => {
+            setHasPendingUpdates(false);
+          });
+          // Refresh data after a short delay to sync with server
+          // The delay allows the optimistic state to be visible first
+          setTimeout(() => {
+            onUpdate?.();
+            router.refresh();
+          }, 100);
+        }
+        
+        return next;
+      });
       setIsLoading(false);
     }
   };
@@ -179,14 +261,16 @@ export function UserConnectionsCell({
         ) : (
           availableConnections.map((connection) => {
             const isGranted = userConnectionIds.has(connection.id);
+            const isConnectionLoading = loadingConnectionIds.has(connection.id);
             return (
               <DropdownMenuCheckboxItem
                 key={connection.id}
                 checked={isGranted}
                 onCheckedChange={(checked) => {
+                  // Prevent default behavior and handle immediately
                   handleToggleConnection(connection.id, checked as boolean);
                 }}
-                disabled={isLoading}
+                disabled={isConnectionLoading || isLoading}
               >
                 <div className="flex items-center justify-between w-full">
                   <span className="flex-1 truncate">

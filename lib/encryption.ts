@@ -107,38 +107,78 @@ export function decrypt(encryptedData: string): string {
     return encryptedData;
   }
 
-  try {
-    const key = getEncryptionKey();
-    const combined = Buffer.from(encryptedData, 'base64');
-
-    // Extract components
-    const iv = combined.subarray(0, IV_LENGTH);
-    const salt = combined.subarray(IV_LENGTH, IV_LENGTH + SALT_LENGTH);
-    const tag = combined.subarray(
-      IV_LENGTH + SALT_LENGTH,
-      IV_LENGTH + SALT_LENGTH + TAG_LENGTH
-    );
-    const encrypted = combined.subarray(IV_LENGTH + SALT_LENGTH + TAG_LENGTH);
-
-    // Create decipher
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(tag);
-
-    // Decrypt
-    let decrypted = decipher.update(encrypted);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-    return decrypted.toString('utf8');
-  } catch (error: any) {
-    // If decryption fails, it might be plaintext (for migration purposes)
-    // Check if it looks like a token (alphanumeric, dashes, underscores)
-    if (/^[A-Za-z0-9_-]+$/.test(encryptedData)) {
-      // Likely plaintext, return as-is (for backward compatibility during migration)
-      console.warn('Decryption failed, treating as plaintext (migration mode)');
-      return encryptedData;
-    }
-    throw new Error(`Decryption failed: ${error.message}`);
+  // Check if data looks encrypted (long base64 string)
+  const looksEncrypted = isEncrypted(encryptedData);
+  
+  // If it looks like plaintext (short, alphanumeric), return as-is
+  if (!looksEncrypted && /^[A-Za-z0-9_-]{1,50}$/.test(encryptedData)) {
+    return encryptedData;
   }
+
+  // If it looks encrypted, try to decrypt
+  if (looksEncrypted) {
+    try {
+      const key = getEncryptionKey();
+      const combined = Buffer.from(encryptedData, 'base64');
+
+      // Validate minimum length
+      if (combined.length < IV_LENGTH + SALT_LENGTH + TAG_LENGTH + 1) {
+        throw new Error(
+          `Encrypted data too short (${combined.length} bytes). ` +
+          'Expected at least ' + (IV_LENGTH + SALT_LENGTH + TAG_LENGTH + 1) + ' bytes.'
+        );
+      }
+
+      // Extract components
+      const iv = combined.subarray(0, IV_LENGTH);
+      const salt = combined.subarray(IV_LENGTH, IV_LENGTH + SALT_LENGTH);
+      const tag = combined.subarray(
+        IV_LENGTH + SALT_LENGTH,
+        IV_LENGTH + SALT_LENGTH + TAG_LENGTH
+      );
+      const encrypted = combined.subarray(IV_LENGTH + SALT_LENGTH + TAG_LENGTH);
+
+      // Create decipher
+      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+      decipher.setAuthTag(tag);
+
+      // Decrypt
+      let decrypted = decipher.update(encrypted);
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+      const plaintext = decrypted.toString('utf8');
+      
+      // Validate decrypted result looks reasonable
+      // For realmId, it should be short (typically 8-15 characters, max 50)
+      // For tokens, they can be longer but should still be reasonable
+      if (plaintext.length > 200 || !/^[\x20-\x7E]+$/.test(plaintext)) {
+        throw new Error(
+          'Decrypted data does not look like valid plaintext. ' +
+          'This may indicate the encryption key is incorrect or the data is corrupted.'
+        );
+      }
+
+      return plaintext;
+    } catch (error: any) {
+      // Provide more helpful error message
+      const errorMessage = error.message || 'Unknown error';
+      throw new Error(
+        `Decryption failed: ${errorMessage}. ` +
+        'This usually means:\n' +
+        '1. The encryption key (QUICKBOOKS_ENCRYPTION_KEY) has changed\n' +
+        '2. The data was encrypted with a different key\n' +
+        '3. The data is corrupted\n\n' +
+        'Solution: Re-authenticate your QuickBooks connection to store new encrypted data.'
+      );
+    }
+  }
+
+  // If it doesn't look encrypted and doesn't match plaintext pattern, return as-is with warning
+  console.warn(
+    'Data does not match expected format (neither encrypted nor plaintext). ' +
+    'Returning as-is, but this may cause issues.'
+  );
+  return encryptedData;
 }
 
 /**

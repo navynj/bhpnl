@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getReportFromNotionById, normalizeNotionId, extractNotionDatabaseIdFromUrl } from '@/lib/notion-reports';
 import { Client } from '@notionhq/client';
+import { getQuickBooksConnectionById } from '@/lib/quickbooks-token';
 
 /**
  * POST /api/reports/[id]/export/notion
@@ -72,19 +73,10 @@ export async function POST(
 
     const notion = new Client({ auth: notionToken });
 
-    // Fetch report data from QuickBooks in real-time
-    const { getProfitAndLossReport } = await import('@/lib/quickbooks-api');
-    const reportData = await getProfitAndLossReport(
-      userId,
-      report.startDate,
-      report.endDate,
-      'Accrual',
-      report.connectionId
-    );
-
-    const header = reportData?.Header || {};
-    const rows = reportData?.Rows?.Row || [];
-    const columns = reportData?.Columns?.Column || [];
+    // Get connection info to retrieve locationName
+    const connection = await getQuickBooksConnectionById(userId, report.connectionId);
+    const locationName = connection?.locationName;
+    const locationPrefix = locationName ? `${locationName} - ` : '';
 
     // Create a page in the target Notion database
     const response = await notion.pages.create({
@@ -96,7 +88,7 @@ export async function POST(
           title: [
             {
               text: {
-                content: `P&L Report (${report.startDate} to ${report.endDate})`,
+                content: `${locationPrefix}P&L Report (${report.startDate} to ${report.endDate})`,
               },
             },
           ],
@@ -119,121 +111,7 @@ export async function POST(
       },
     });
 
-    // Build children blocks for the report content
-    const children: any[] = [];
-
-    // Add header information
-    children.push({
-      object: 'block',
-      type: 'heading_1',
-      heading_1: {
-        rich_text: [
-          {
-            type: 'text',
-            text: { content: 'Profit & Loss Report' },
-          },
-        ],
-      },
-    });
-
-    children.push({
-      object: 'block',
-      type: 'paragraph',
-      paragraph: {
-        rich_text: [
-          {
-            type: 'text',
-            text: {
-              content: `Period: ${report.startDate} to ${report.endDate}`,
-            },
-          },
-        ],
-      },
-    });
-
-    children.push({
-      object: 'block',
-      type: 'paragraph',
-      paragraph: {
-        rich_text: [
-          {
-            type: 'text',
-            text: { content: `Report Basis: ${header.ReportBasis || 'N/A'}` },
-          },
-        ],
-      },
-    });
-
-    children.push({
-      object: 'block',
-      type: 'paragraph',
-      paragraph: {
-        rich_text: [
-          {
-            type: 'text',
-            text: { content: `Currency: ${header.Currency || 'N/A'}` },
-          },
-        ],
-      },
-    });
-
-    // Add report data section
-    if (rows.length > 0) {
-      children.push({
-        object: 'block',
-        type: 'heading_2',
-        heading_2: {
-          rich_text: [
-            {
-              type: 'text',
-              text: { content: 'Report Data' },
-            },
-          ],
-        },
-      });
-
-      // Format report data as a code block with table-like structure
-      let reportTable = '';
-      
-      // Add header row if columns exist
-      if (columns.length > 0) {
-        const headers = columns.map((col: any) => col.ColTitle || '').join(' | ');
-        reportTable += `| ${headers} |\n`;
-        reportTable += `| ${columns.map(() => '---').join(' | ')} |\n`;
-      }
-
-      // Add data rows
-      rows.forEach((row: any) => {
-        if (row.ColData && row.ColData.length > 0) {
-          const values = row.ColData.map((col: any) => col.value || '').join(' | ');
-          reportTable += `| ${values} |\n`;
-        }
-      });
-
-      children.push({
-        object: 'block',
-        type: 'code',
-        code: {
-          caption: [],
-          rich_text: [
-            {
-              type: 'text',
-              text: { content: reportTable },
-            },
-          ],
-          language: 'plain text',
-        },
-      });
-    }
-
-    // Add all children blocks to the page in batches
-    for (let i = 0; i < children.length; i += 100) {
-      const batch = children.slice(i, i + 100);
-      await notion.blocks.children.append({
-        block_id: response.id,
-        children: batch,
-      });
-    }
+    // Page content is intentionally left empty
 
     // Format page ID with hyphens for URL construction
     const formatNotionId = (id: string): string => {

@@ -6,22 +6,231 @@ export interface ReportData {
     Currency?: string;
     StartPeriod?: string;
     EndPeriod?: string;
+    SummarizeColumnsBy?: string;
     Option?: Array<{
       Name?: string;
       Value?: string;
     }>;
   };
   Rows?: {
-    Row?: Array<{
-      ColData?: Array<{
-        value?: string;
-      }>;
-    }>;
+    Row?: Array<any>;
   };
   Columns?: {
     Column?: Array<{
       ColTitle?: string;
+      MetaData?: Array<{
+        Name?: string;
+        Value?: string;
+      }>;
     }>;
+  };
+}
+
+interface SectionData {
+  header: string;
+  items: Array<{ label: string; value: string }>;
+  total: { label: string; value: string };
+  isImportant?: boolean;
+}
+
+interface ExpenseSection {
+  header: string;
+  items: Array<{ label: string; value: string }>;
+  total: { label: string; value: string };
+}
+
+/**
+ * Format currency value
+ */
+function formatCurrency(value: string, currency: string = 'CAD'): string {
+  if (!value || value === '') return '';
+
+  const numValue = parseFloat(value);
+  if (isNaN(numValue)) return value;
+
+  const symbol =
+    currency === 'USD' ? '$' : currency === 'CAD' ? 'C$' : currency;
+  return `${symbol}${Math.abs(numValue).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/**
+ * Extract items from a row structure
+ */
+function extractItems(rows: any[]): Array<{ label: string; value: string }> {
+  const items: Array<{ label: string; value: string }> = [];
+
+  if (!Array.isArray(rows)) return items;
+
+  rows.forEach((row) => {
+    // Direct ColData (data rows)
+    if (row.ColData && Array.isArray(row.ColData) && row.type === 'Data') {
+      const label = row.ColData[0]?.value || '';
+      const value = row.ColData[1]?.value || '';
+      if (label) {
+        items.push({ label, value });
+      }
+    }
+
+    // Header with nested rows (sub-sections like "Sales 01 - Clover Sales")
+    if (row.Header?.ColData && row.Rows?.Row) {
+      const headerLabel = row.Header.ColData[0]?.value || '';
+      const headerValue = row.Header.ColData[1]?.value || '';
+
+      // Add the header as an item if it has a value, or as a sub-section header
+      if (headerValue) {
+        items.push({ label: headerLabel, value: headerValue });
+      } else {
+        // It's a sub-section, add its summary if available
+        if (row.Summary?.ColData) {
+          const summaryLabel = row.Summary.ColData[0]?.value || '';
+          const summaryValue = row.Summary.ColData[1]?.value || '';
+          if (summaryLabel && summaryValue) {
+            items.push({ label: summaryLabel, value: summaryValue });
+          }
+        }
+      }
+    }
+  });
+
+  return items;
+}
+
+/**
+ * Parse report data into structured sections
+ */
+function parseReportData(reportData: ReportData): {
+  income: SectionData | null;
+  costOfSales: SectionData | null;
+  grossProfit: { label: string; value: string } | null;
+  expenses: {
+    sections: ExpenseSection[];
+    total: { label: string; value: string } | null;
+  };
+  otherIncome: SectionData | null;
+  profit: { label: string; value: string } | null;
+} {
+  const rows = reportData.Rows?.Row || [];
+
+  let income: SectionData | null = null;
+  let costOfSales: SectionData | null = null;
+  let grossProfit: { label: string; value: string } | null = null;
+  const expenseSections: ExpenseSection[] = [];
+  let expensesTotal: { label: string; value: string } | null = null;
+  let otherIncome: SectionData | null = null;
+  let profit: { label: string; value: string } | null = null;
+
+  rows.forEach((row) => {
+    const headerValue = row.Header?.ColData?.[0]?.value || '';
+    const summary = row.Summary?.ColData;
+    const summaryLabel = summary?.[0]?.value || '';
+    const summaryValue = summary?.[1]?.value || '';
+
+    // INCOME section
+    if (headerValue.toUpperCase() === 'INCOME' || row.group === 'Income') {
+      const items = extractItems(row.Rows?.Row || []);
+      income = {
+        header: 'Income',
+        items,
+        total: { label: summaryLabel, value: summaryValue },
+      };
+    }
+
+    // COST OF GOODS SOLD / COST OF SALES section
+    if (
+      headerValue.toUpperCase().includes('COST OF GOODS SOLD') ||
+      headerValue.toUpperCase().includes('COST OF SALES') ||
+      row.group === 'COGS'
+    ) {
+      const items = extractItems(row.Rows?.Row || []);
+      costOfSales = {
+        header: 'Cost of Sales',
+        items,
+        total: { label: summaryLabel, value: summaryValue },
+        isImportant: true,
+      };
+    }
+
+    // Gross Profit (usually appears as a summary between COGS and Expenses)
+    if (
+      summaryLabel.toUpperCase().includes('GROSS PROFIT') ||
+      summaryLabel.toUpperCase().includes('GROSS INCOME')
+    ) {
+      grossProfit = { label: summaryLabel, value: summaryValue };
+    }
+
+    // EXPENSES section
+    if (headerValue.toUpperCase() === 'EXPENSES' || row.group === 'Expenses') {
+      // Process expense sub-sections (Expense A, B, C, D, E)
+      const expenseRows = row.Rows?.Row || [];
+
+      expenseRows.forEach((expenseRow: any) => {
+        const expenseHeader = expenseRow.Header?.ColData?.[0]?.value || '';
+        const expenseSummary = expenseRow.Summary?.ColData;
+        const expenseSummaryLabel = expenseSummary?.[0]?.value || '';
+        const expenseSummaryValue = expenseSummary?.[1]?.value || '';
+
+        // Check if this is an expense sub-section (Expense A, B, C, D, E)
+        if (
+          expenseHeader.toUpperCase().includes('EXPENSE') &&
+          expenseRow.Rows?.Row
+        ) {
+          const items = extractItems(expenseRow.Rows.Row);
+          expenseSections.push({
+            header: expenseHeader,
+            items,
+            total: {
+              label: expenseSummaryLabel,
+              value: expenseSummaryValue,
+            },
+          });
+        }
+      });
+
+      // Total for Expenses
+      if (
+        summaryLabel.toUpperCase().includes('TOTAL') &&
+        summaryLabel.toUpperCase().includes('EXPENSES')
+      ) {
+        expensesTotal = { label: summaryLabel, value: summaryValue };
+      }
+    }
+
+    // OTHER INCOME section
+    if (
+      headerValue.toUpperCase().includes('OTHER INCOME') ||
+      row.group === 'OtherIncome'
+    ) {
+      const items = extractItems(row.Rows?.Row || []);
+      otherIncome = {
+        header: 'Other Income',
+        items,
+        total: { label: summaryLabel, value: summaryValue },
+      };
+    }
+
+    // PROFIT
+    if (
+      summaryLabel.toUpperCase() === 'PROFIT' ||
+      summaryLabel.toUpperCase() === 'NET INCOME' ||
+      row.group === 'NetIncome'
+    ) {
+      profit = { label: summaryLabel, value: summaryValue };
+    }
+  });
+
+  return {
+    income,
+    costOfSales,
+    grossProfit,
+    expenses: {
+      sections: expenseSections,
+      total: expensesTotal,
+    },
+    otherIncome,
+    profit,
   };
 }
 
@@ -31,280 +240,578 @@ export interface ReportData {
 export function generatePDFFromReportData(
   reportData: ReportData,
   startDate: string,
-  endDate: string
+  endDate: string,
+  locationName?: string | null,
+  targetPercentages?: {
+    costOfSales?: number;
+    payroll?: number;
+    profit?: number;
+  }
 ): Uint8Array {
+  // Debug: Log target percentages
+  console.log('[PDF Generator] Target percentages:', targetPercentages);
+
   const doc = new jsPDF();
-  
-  // Debug: Log data structure
-  console.log('PDF Generation - Report Data:', JSON.stringify(reportData, null, 2));
-  console.log('PDF Generation - Rows:', reportData.Rows?.Row?.length || 0);
-  console.log('PDF Generation - Columns:', reportData.Columns?.Column?.length || 0);
-  
+
   // Set up page
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 20;
   let yPosition = margin;
 
+  // Header information
+  const header = reportData.Header || {};
+  const currency = header.Currency || 'CAD';
+
+  // Check if this is a monthly report by looking at SummarizeColumnsBy
+  const isMonthlyMode = header.SummarizeColumnsBy === 'Month';
+  let months: Array<{ year: number; month: number }> = [];
+
+  // Extract months from Columns if monthly mode
+  if (isMonthlyMode) {
+    const columns = reportData.Columns?.Column || [];
+    // Skip first column (Account label) and last column (Total)
+    // Get month columns (they have StartDate and EndDate in MetaData)
+    const monthColumns = columns.filter((col: any) => {
+      if (!col.MetaData) return false;
+      const hasStartDate = col.MetaData.some(
+        (meta: any) => meta.Name === 'StartDate'
+      );
+      const hasEndDate = col.MetaData.some(
+        (meta: any) => meta.Name === 'EndDate'
+      );
+      return hasStartDate && hasEndDate;
+    });
+
+    // Extract year and month from StartDate
+    months = monthColumns
+      .map((col: any) => {
+        const startDateMeta = col.MetaData.find(
+          (meta: any) => meta.Name === 'StartDate'
+        );
+        if (startDateMeta && startDateMeta.Value) {
+          const date = new Date(startDateMeta.Value);
+          return {
+            year: date.getFullYear(),
+            month: date.getMonth() + 1, // JavaScript months are 0-indexed
+          };
+        }
+        return null;
+      })
+      .filter((m): m is { year: number; month: number } => m !== null);
+  }
+
+  // Fallback: check for legacy _monthlyMode flag
+  if (!isMonthlyMode) {
+    const legacyMonthlyMode = (reportData as any)._monthlyMode === true;
+    const legacyMonths = (reportData as any)._months || [];
+    if (legacyMonthlyMode && legacyMonths.length > 0) {
+      months = legacyMonths;
+    }
+  }
+
   // Title
-  doc.setFontSize(10);
+  doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
-  doc.text('Profit & Loss Report', pageWidth / 2, yPosition, {
+  const title =
+    isMonthlyMode || months.length > 0
+      ? 'Monthly P&L Report'
+      : 'Profit & Loss Report';
+  doc.text(title, pageWidth / 2, yPosition, {
     align: 'center',
   });
   yPosition += 10;
 
-  // Period
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text(
-    `Period: ${startDate} to ${endDate}`,
-    pageWidth / 2,
-    yPosition,
-    { align: 'center' }
-  );
-  yPosition += 10;
-
-  // Header information
-  const header = reportData.Header || {};
-  const hasNoData = header.Option?.some((opt: any) => opt.Name === 'NoReportData' && opt.Value === 'true');
-  
-  if (hasNoData) {
-    yPosition += 5;
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(128, 128, 128); // Gray color
-    doc.text('Note: No transaction data available for this period', margin, yPosition);
-    doc.setTextColor(0, 0, 0); // Reset to black
-    yPosition += 10;
+  // Location Name
+  if (locationName) {
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(locationName, pageWidth / 2, yPosition, {
+      align: 'center',
+    });
+    yPosition += 8;
   }
-  
-  if (header.ReportBasis || header.Currency) {
-    yPosition += 5;
+
+  // Period
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Period: ${startDate} to ${endDate}`, pageWidth / 2, yPosition, {
+    align: 'center',
+  });
+  yPosition += 12;
+
+  if (header.ReportBasis) {
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    if (header.ReportBasis) {
-      doc.text(`Report Basis: ${header.ReportBasis}`, margin, yPosition);
-      yPosition += 7;
-    }
-    if (header.Currency) {
-      doc.text(`Currency: ${header.Currency}`, margin, yPosition);
-      yPosition += 10;
-    }
+    doc.text(`Basis: ${header.ReportBasis}`, margin, yPosition);
+    yPosition += 7;
   }
 
-  // Table data - handle QuickBooks P&L report structure
-  // Rows can have: Header.ColData, Summary.ColData, or direct ColData
-  // They can also have nested Rows.Row arrays
-  interface ProcessedRow {
-    ColData: Array<{ value?: string }>;
-    isSection?: boolean;
-    isSummary?: boolean;
-    indent?: number;
+  yPosition += 5;
+
+  if ((isMonthlyMode || months.length > 0) && months.length > 0) {
+    // Use monthly report rendering
+    // Pass the current yPosition so generateMonthlyPDF doesn't redraw the header
+    return generateMonthlyPDF(
+      doc,
+      reportData,
+      startDate,
+      endDate,
+      locationName,
+      months,
+      currency,
+      yPosition, // Pass current yPosition
+      targetPercentages // Pass target percentages
+    );
   }
-  
-  const rows: ProcessedRow[] = [];
-  
-  // Flatten nested rows structure and handle Header/Summary
-  const processRows = (rowArray: any[], indentLevel: number = 0) => {
-    if (!Array.isArray(rowArray)) {
-      console.warn('PDF Generation - rowArray is not an array:', typeof rowArray);
-      return;
-    }
-    
-    rowArray.forEach((row, idx) => {
-      // Handle Header (section headers)
-      if (row.Header?.ColData && Array.isArray(row.Header.ColData)) {
-        const headerRow: ProcessedRow = {
-          ColData: row.Header.ColData,
-          isSection: true,
-          indent: indentLevel,
-        };
-        rows.push(headerRow);
-      }
-      
-      // Handle direct ColData (regular data rows)
-      if (row.ColData && Array.isArray(row.ColData) && row.ColData.length > 0) {
-        rows.push({
-          ColData: row.ColData,
-          indent: indentLevel,
-        });
-      }
-      
-      // Handle Summary (section summaries)
-      if (row.Summary?.ColData && Array.isArray(row.Summary.ColData)) {
-        const summaryRow: ProcessedRow = {
-          ColData: row.Summary.ColData,
-          isSummary: true,
-          indent: indentLevel,
-        };
-        rows.push(summaryRow);
-      }
-      
-      // Process nested rows (increase indent)
-      if (row.Rows?.Row && Array.isArray(row.Rows.Row)) {
-        processRows(row.Rows.Row, indentLevel + 1);
-      }
-    });
+
+  // Parse data for period mode
+  const parsed = parseReportData(reportData);
+
+  // Get Income total for percentage calculations
+  const incomeTotal = parsed.income?.total?.value
+    ? parseFloat(parsed.income.total.value)
+    : 0;
+
+  // Helper function to calculate percentage of income
+  const calculatePercentage = (value: string): string => {
+    if (!value || incomeTotal === 0) return '';
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return '';
+    const percentage = (numValue / incomeTotal) * 100;
+    return `${percentage.toFixed(2)}%`;
   };
-  
-  // Check data structure
-  console.log('PDF Generation - reportData.Rows:', reportData.Rows);
-  console.log('PDF Generation - reportData.Rows?.Row:', reportData.Rows?.Row);
-  console.log('PDF Generation - reportData.Columns:', reportData.Columns);
-  
-  if (reportData.Rows?.Row && Array.isArray(reportData.Rows.Row)) {
-    processRows(reportData.Rows.Row);
-  } else {
-    console.warn('PDF Generation - No valid Rows.Row array found');
-  }
-  
-  const columns = reportData.Columns?.Column || [];
-  
-  console.log('PDF Generation - Processed Rows:', rows.length);
-  console.log('PDF Generation - Processed Columns:', columns.length);
-  
-  // Log sample row data
-  if (rows.length > 0) {
-    console.log('PDF Generation - Sample Row:', JSON.stringify(rows[0], null, 2));
-  }
 
-  if (rows.length > 0) {
-    yPosition += 5;
-    
-    // Table settings
-    const colWidths: number[] = [];
-    // Determine number of columns from the first row with data
-    let maxCols = columns.length;
-    rows.forEach(row => {
-      if (row.ColData && row.ColData.length > maxCols) {
-        maxCols = row.ColData.length;
-      }
-    });
-    
-    // If we have actual data columns, use them; otherwise use a single column for account names
-    const numCols = Math.max(maxCols, 1);
-    const availableWidth = pageWidth - 2 * margin;
-    
-    // Calculate column widths
-    if (numCols === 1) {
-      // Single column for account names only
-      colWidths.push(availableWidth);
-    } else {
-      // First column wider for account names, rest for amounts
-      colWidths.push(availableWidth * 0.4); // First column (account names)
-      const remainingWidth = availableWidth * 0.6;
-      const otherColWidth = remainingWidth / (numCols - 1);
-      for (let i = 1; i < numCols; i++) {
-        colWidths.push(otherColWidth);
-      }
+  // Table settings
+  const availableWidth = pageWidth - 2 * margin;
+  const labelWidth = availableWidth * 0.5;
+  const valueWidth = availableWidth * 0.3;
+  const percentageWidth = availableWidth * 0.2;
+  // Calculate actual table end position based on actual column widths
+  const tableEndX = margin + labelWidth + valueWidth + percentageWidth;
+  const lineHeight = 7;
+  const sectionSpacing = 8;
+  // Font size is 10pt
+  // In jsPDF, text is drawn from baseline
+  // For consistent row height, we calculate based on actual text rendering
+  // Single line: lineHeight (7pt) - this is the distance from baseline to next baseline
+  // Multi-line: first line baseline to last line baseline + lineHeight
+  const lineSpacing = 5; // Spacing between lines in multi-line text (baseline to baseline)
+
+  // Helper function to draw a section
+  const drawSection = (
+    section: SectionData | null,
+    isImportant: boolean = false,
+    targetPercent?: number
+  ) => {
+    if (!section) return;
+
+    // Check page break
+    if (yPosition + 30 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
     }
 
-    // Table header - always show header for clarity
-    doc.setFontSize(10);
+    // Section header
+    doc.setFontSize(isImportant ? 13 : 12);
     doc.setFont('helvetica', 'bold');
-    let xPosition = margin;
-    
-    // Show column headers
-    if (numCols === 1) {
-      // Single column - just show "Account"
-      doc.text('Account', xPosition, yPosition);
-    } else {
-      // Multiple columns - show all column titles
-      for (let i = 0; i < numCols; i++) {
-        const colTitle = i < columns.length && columns[i].ColTitle 
-          ? columns[i].ColTitle 
-          : i === 0 ? 'Account' : '';
-        if (colTitle || i === 0) {
-          doc.text(colTitle || (i === 0 ? 'Account' : ''), xPosition, yPosition);
-        }
-        xPosition += colWidths[i] || 0;
-      }
-    }
+    doc.text(section.header, margin, yPosition);
     yPosition += 8;
 
     // Draw line under header
     doc.setLineWidth(0.5);
-    doc.line(margin, yPosition - 2, pageWidth - margin, yPosition - 2);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 5;
+
+    // Column headers
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CURRENT', margin + labelWidth, yPosition, { align: 'right' });
+    doc.text('% of Income', margin + labelWidth + valueWidth, yPosition, {
+      align: 'right',
+    });
+    yPosition += 6;
+
+    // Draw line under column headers
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
     yPosition += 3;
 
-    // Table rows
-    rows.forEach((row, rowIndex) => {
-      // Check if we need a new page
-      if (yPosition > pageHeight - margin - 10) {
+    // Items
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    section.items.forEach((item) => {
+      if (yPosition + lineHeight > pageHeight - margin) {
         doc.addPage();
         yPosition = margin;
       }
 
-      const colData = row.ColData || [];
-      
-      if (colData.length === 0) {
-        // Skip empty rows
-        return;
-      }
-      
-      // Set font style based on row type (font size is consistent)
-      if (row.isSection) {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10);
-      } else if (row.isSummary) {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10);
-      } else {
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(10);
-      }
-      
-      // Initialize xPosition for each row
-      let xPosition = margin;
-      
-      // Add indent for nested rows
-      if (row.indent && row.indent > 0) {
-        xPosition += row.indent * 10;
-      }
-      
-      // Handle case where ColData might have fewer items than columns
-      // QuickBooks sometimes returns only account names without amounts
-      colData.forEach((cell, index) => {
-        if (index < colWidths.length) {
-          const value = cell?.value || '';
-          if (value) {
-            // Truncate long text
-            const maxWidth = colWidths[index] - 2 - (row.indent ? row.indent * 10 : 0);
-            const text = doc.splitTextToSize(value, maxWidth);
-            doc.text(text, xPosition, yPosition);
-          }
-          xPosition += colWidths[index] || 0;
-        }
+      const labelLines = doc.splitTextToSize(item.label, labelWidth - 5);
+      const startY = yPosition;
+
+      // Calculate row height first (before drawing)
+      // This ensures consistent spacing
+      const rowHeight =
+        labelLines.length === 1
+          ? lineHeight
+          : (labelLines.length - 1) * lineSpacing + lineHeight;
+
+      // Draw all text first
+      labelLines.forEach((line: string, index: number) => {
+        doc.text(line, margin, startY + index * lineSpacing);
       });
-      
-      // If there are more columns than ColData items, fill remaining columns with empty space
-      // This handles cases where only account names are provided without amounts
-      for (let i = colData.length; i < colWidths.length; i++) {
-        xPosition += colWidths[i] || 0;
+
+      const value = formatCurrency(item.value, currency);
+      const percentage = calculatePercentage(item.value);
+      // Align value with the first line of label
+      doc.text(value, margin + labelWidth, startY, { align: 'right' });
+      if (percentage) {
+        doc.setFontSize(9);
+        doc.text(percentage, margin + labelWidth + valueWidth, startY, {
+          align: 'right',
+        });
+        doc.setFontSize(10);
       }
-      
-      // Add spacing between rows
-      let rowHeight = 8;
-      if (row.isSection) {
-        rowHeight = 10;
-      } else if (row.isSummary) {
-        rowHeight = 9;
+
+      // Calculate the bottom of the row
+      // rowHeight is the distance from startY (first line baseline) to the next row's baseline
+      // But we want to draw the line at the actual bottom of the text
+      // For multi-line text, the last line's baseline is: startY + (labelLines.length - 1) * lineSpacing
+      // Text extends about 2-3pt below baseline, so we add that to get the actual bottom
+      // For single line, we use startY + lineHeight - 2 (to account for text extending below baseline)
+      const lastLineBaseline = startY + (labelLines.length - 1) * lineSpacing;
+      const rowBottom = lastLineBaseline + 2; // 2pt below baseline for 10pt font
+
+      // Draw thin line under each row (at the bottom of the row, before next row starts)
+      doc.setLineWidth(0.1);
+      doc.line(margin, rowBottom, tableEndX, rowBottom);
+
+      // Update yPosition to the next row's baseline
+      yPosition = startY + rowHeight;
+    });
+
+    // Total
+    if (section.total.label && section.total.value) {
+      if (yPosition + lineHeight + 3 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
       }
-      yPosition += rowHeight;
-      
-      // Draw line after section summaries
-      if (row.isSummary) {
-        doc.setLineWidth(0.3);
-        doc.line(margin, yPosition - 2, pageWidth - margin, yPosition - 2);
+
+      yPosition += 3;
+      doc.setFontSize(isImportant ? 12 : 11);
+      doc.setFont('helvetica', 'bold');
+      const totalLabel = section.total.label;
+      const totalValue = formatCurrency(section.total.value, currency);
+      const totalPercentage = calculatePercentage(section.total.value);
+      doc.text(totalLabel, margin, yPosition);
+      doc.text(totalValue, margin + labelWidth, yPosition, { align: 'right' });
+      if (totalPercentage) {
+        doc.setFontSize(10);
+        doc.text(totalPercentage, margin + labelWidth + valueWidth, yPosition, {
+          align: 'right',
+        });
+        doc.setFontSize(isImportant ? 12 : 11);
+      }
+
+      // Draw target percentage if available
+      if (targetPercent !== undefined) {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        const targetText = `Target: ${targetPercent.toFixed(2)}%`;
+        const targetX = margin + labelWidth + valueWidth;
+        const targetY = yPosition + 3; // Move down slightly
+        doc.text(targetText, targetX, targetY, { align: 'right' });
+        doc.setFont('helvetica', 'bold'); // Reset font
+      }
+
+      yPosition += lineHeight + sectionSpacing;
+    } else {
+      yPosition += sectionSpacing;
+    }
+  };
+
+  // Draw Income
+  drawSection(parsed.income);
+
+  // Draw Cost of Sales (important!) with target percentage
+  drawSection(parsed.costOfSales, true, targetPercentages?.costOfSales);
+
+  // Draw Gross Profit
+  if (parsed.grossProfit) {
+    if (yPosition + 15 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    // Column headers for Gross Profit
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CURRENT', margin + labelWidth, yPosition, { align: 'right' });
+    doc.text('% of Income', margin + labelWidth + valueWidth, yPosition, {
+      align: 'right',
+    });
+    yPosition += 6;
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    const grossProfitValue = formatCurrency(parsed.grossProfit.value, currency);
+    const grossProfitPercentage = calculatePercentage(parsed.grossProfit.value);
+    doc.text(parsed.grossProfit.label, margin, yPosition);
+    doc.text(grossProfitValue, margin + labelWidth, yPosition, {
+      align: 'right',
+    });
+    if (grossProfitPercentage) {
+      doc.setFontSize(10);
+      doc.text(
+        grossProfitPercentage,
+        margin + labelWidth + valueWidth,
+        yPosition,
+        {
+          align: 'right',
+        }
+      );
+      doc.setFontSize(12);
+    }
+    yPosition += lineHeight + sectionSpacing;
+  }
+
+  // Draw Expenses
+  if (parsed.expenses.sections.length > 0 || parsed.expenses.total) {
+    if (yPosition + 30 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    // Expenses header
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Expenses', margin, yPosition);
+    yPosition += 8;
+
+    // Draw line
+    doc.setLineWidth(0.5);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 5;
+
+    // Column headers
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CURRENT', margin + labelWidth, yPosition, { align: 'right' });
+    doc.text('% of Income', margin + labelWidth + valueWidth, yPosition, {
+      align: 'right',
+    });
+    yPosition += 6;
+
+    // Draw line under column headers
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 3;
+
+    // Draw each expense sub-section
+    parsed.expenses.sections.forEach((expenseSection, sectionIndex) => {
+      if (yPosition + 20 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      // Add spacing before each expense section (except the first one)
+      if (sectionIndex > 0) {
+        yPosition += 3; // Extra spacing before section header
+      }
+
+      // Check if this is Fixed Expense - skip items and show only total
+      const isFixedExpense = expenseSection.header
+        ?.toUpperCase()
+        .includes('FIXED');
+
+      // Sub-section header (Expense A, B, C, D, E)
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text(expenseSection.header, margin, yPosition);
+      yPosition += 7;
+
+      // Items - skip for Fixed Expense
+      if (!isFixedExpense) {
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        expenseSection.items.forEach((item) => {
+          if (yPosition + lineHeight > pageHeight - margin) {
+            doc.addPage();
+            yPosition = margin;
+          }
+
+          const labelLines = doc.splitTextToSize(item.label, labelWidth - 15);
+          const startY = yPosition;
+
+          // Calculate row height first (before drawing)
+          // This ensures consistent spacing
+          const rowHeight =
+            labelLines.length === 1
+              ? lineHeight
+              : (labelLines.length - 1) * lineSpacing + lineHeight;
+
+          // Draw all text first
+          labelLines.forEach((line: string, index: number) => {
+            doc.text(line, margin + 10, startY + index * lineSpacing);
+          });
+
+          const value = formatCurrency(item.value, currency);
+          const percentage = calculatePercentage(item.value);
+          // Align value with the first line of label
+          doc.text(value, margin + labelWidth, startY, { align: 'right' });
+          if (percentage) {
+            doc.setFontSize(9);
+            doc.text(percentage, margin + labelWidth + valueWidth, startY, {
+              align: 'right',
+            });
+            doc.setFontSize(10);
+          }
+
+          // Calculate the bottom of the row
+          // rowHeight is the distance from startY (first line baseline) to the next row's baseline
+          // But we want to draw the line at the actual bottom of the text
+          // For multi-line text, the last line's baseline is: startY + (labelLines.length - 1) * lineSpacing
+          // Text extends about 2-3pt below baseline, so we add that to get the actual bottom
+          // For single line, we use startY + lineHeight - 2 (to account for text extending below baseline)
+          const lastLineBaseline =
+            startY + (labelLines.length - 1) * lineSpacing;
+          const rowBottom = lastLineBaseline + 2; // 2pt below baseline for 10pt font
+
+          // Draw very thin line under each item row (E1, E2, E3, etc.)
+          doc.setLineWidth(0.05);
+          doc.line(margin, rowBottom, tableEndX, rowBottom);
+
+          // Update yPosition to the next row's baseline
+          yPosition = startY + rowHeight;
+        });
+      }
+
+      // Sub-section total
+      if (expenseSection.total.label && expenseSection.total.value) {
+        if (yPosition + lineHeight + 3 > pageHeight - margin) {
+          doc.addPage();
+          yPosition = margin;
+        }
+
+        yPosition += 3;
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        const totalLabel = expenseSection.total.label;
+        const totalValue = formatCurrency(expenseSection.total.value, currency);
+        const totalPercentage = calculatePercentage(expenseSection.total.value);
+        doc.text(totalLabel, margin, yPosition);
+        doc.text(totalValue, margin + labelWidth, yPosition, {
+          align: 'right',
+        });
+        if (totalPercentage) {
+          doc.setFontSize(9);
+          doc.text(
+            totalPercentage,
+            margin + labelWidth + valueWidth,
+            yPosition,
+            {
+              align: 'right',
+            }
+          );
+          doc.setFontSize(10);
+        }
+
+        // Check if this is Payroll and has target percentage
+        const isPayroll = expenseSection.total.label
+          ?.toUpperCase()
+          .includes('PAYROLL');
+        if (isPayroll && targetPercentages?.payroll !== undefined) {
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'italic');
+          const targetText = `Target: ${targetPercentages.payroll.toFixed(2)}%`;
+          const targetX = margin + labelWidth + valueWidth;
+          const targetY = yPosition + 3; // Move down slightly
+          doc.text(targetText, targetX, targetY, { align: 'right' });
+          doc.setFont('helvetica', 'bold'); // Reset font
+        }
+
+        yPosition += lineHeight + 2;
+
+        // Draw line after each expense sub-section (Expense A, B, C, D, E) total
+        // This separates each expense section
+        // Add spacing before the line
         yPosition += 2;
+        doc.setLineWidth(0.2);
+        doc.line(margin, yPosition, tableEndX, yPosition);
+        // Add spacing after the line (before next section header)
+        yPosition += 3;
       }
     });
-    
-    // If no rows were processed, add a message
-    if (rows.length === 0) {
-      doc.setFontSize(10);
-      doc.text('No data available', pageWidth / 2, yPosition, { align: 'center' });
+
+    // Total for Expenses
+    if (parsed.expenses.total) {
+      if (yPosition + lineHeight + 5 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      yPosition += 5;
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      const totalLabel = parsed.expenses.total.label;
+      const totalValue = formatCurrency(parsed.expenses.total.value, currency);
+      const totalPercentage = calculatePercentage(parsed.expenses.total.value);
+      doc.text(totalLabel, margin, yPosition);
+      doc.text(totalValue, margin + labelWidth, yPosition, { align: 'right' });
+      if (totalPercentage) {
+        doc.setFontSize(10);
+        doc.text(totalPercentage, margin + labelWidth + valueWidth, yPosition, {
+          align: 'right',
+        });
+        doc.setFontSize(11);
+      }
+      yPosition += lineHeight + sectionSpacing;
+    }
+  }
+
+  // Draw Other Income
+  drawSection(parsed.otherIncome);
+
+  // Draw Profit
+  if (parsed.profit) {
+    if (yPosition + 20 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    yPosition += 5;
+
+    // Column headers for Profit
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CURRENT', margin + labelWidth, yPosition, { align: 'right' });
+    doc.text('% of Income', margin + labelWidth + valueWidth, yPosition, {
+      align: 'right',
+    });
+    yPosition += 6;
+
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    const profitValue = formatCurrency(parsed.profit.value, currency);
+    const profitPercentage = calculatePercentage(parsed.profit.value);
+    doc.text(parsed.profit.label, margin, yPosition);
+    doc.text(profitValue, margin + labelWidth, yPosition, { align: 'right' });
+    if (profitPercentage) {
+      doc.setFontSize(12);
+      doc.text(profitPercentage, margin + labelWidth + valueWidth, yPosition, {
+        align: 'right',
+      });
+      doc.setFontSize(14);
+    }
+
+    // Draw target percentage if available (for Profit)
+    if (targetPercentages?.profit !== undefined) {
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'italic');
+      const targetText = `Target: ${targetPercentages.profit.toFixed(2)}%`;
+      const targetX = margin + labelWidth + valueWidth;
+      const targetY = yPosition + 3; // Move down slightly
+      doc.text(targetText, targetX, targetY, { align: 'right' });
     }
   }
 
@@ -314,10 +821,1025 @@ export function generatePDFFromReportData(
 }
 
 /**
+ * Generate PDF for monthly report mode
+ */
+function generateMonthlyPDF(
+  doc: jsPDF,
+  reportData: ReportData,
+  startDate: string,
+  endDate: string,
+  locationName: string | null | undefined,
+  months: Array<{ year: number; month: number }>,
+  currency: string,
+  initialYPosition: number, // Pass the yPosition from the main function
+  targetPercentages?: {
+    costOfSales?: number;
+    payroll?: number;
+    profit?: number;
+  }
+): Uint8Array {
+  // Debug: Log target percentages
+  console.log('[PDF Generator Monthly] Target percentages:', targetPercentages);
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  // Reduce margin for more space (especially important for 3+ months)
+  const margin = 12; // Reduced from 15 to minimize left padding
+  let yPosition = initialYPosition; // Use the passed yPosition instead of starting from margin
+
+  // Note: Header (Title, Location, Period, Basis) is already drawn in generatePDFFromReportData
+  // So we don't need to draw it again here - just start with the table
+
+  // Table settings for monthly mode - optimized for multiple months
+  const availableWidth = pageWidth - 2 * margin;
+  const numColumns = months.length + 1; // months + Total
+  // Reduce label width to give more space to columns and minimize left padding
+  const labelWidth = availableWidth * 0.3; // Reduced from 0.35 to minimize left padding
+  // Calculate column width to fill the entire available space
+  // Since we use column centers (xPos), the last column's right edge should be at pageWidth - margin
+  // Last column center = margin + labelWidth + (numColumns - 1) * columnWidth
+  // Last column right edge = last column center + columnWidth / 2 = pageWidth - margin
+  // So: margin + labelWidth + (numColumns - 1) * columnWidth + columnWidth / 2 = pageWidth - margin
+  // Solving: columnWidth = (pageWidth - 2 * margin - labelWidth) / (numColumns - 0.5)
+  const columnWidth =
+    (pageWidth - 2 * margin - labelWidth) / (numColumns - 0.5);
+  // Calculate the actual end position - should be pageWidth - margin
+  const tableEndX = pageWidth - margin;
+  // Reduce line heights and spacing
+  const lineHeight = 6;
+  const sectionSpacing = 6;
+  const lineSpacing = 4;
+
+  // Get month labels
+  const monthLabels = months.map((m) => {
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return `${monthNames[m.month - 1]} ${m.year}`;
+  });
+
+  // Parse data
+  const parsed = parseReportDataMonthly(reportData, months.length);
+
+  // Get Income total for percentage calculations
+  // For monthly columns: use first month's income
+  // For Total column: use total income (sum of all months)
+  const incomeTotalForMonths = parsed.income?.total?.values?.[0]
+    ? parseFloat(parsed.income.total.values[0])
+    : 0;
+  const incomeTotalForTotal = parsed.income?.total?.total
+    ? parseFloat(parsed.income.total.total)
+    : 0;
+
+  // Helper function to calculate percentage of income
+  // isTotalColumn: true if calculating percentage for Total column
+  const calculatePercentage = (
+    value: string,
+    isTotalColumn: boolean = false
+  ): string => {
+    if (!value) return '';
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return '';
+
+    // Use total income for Total column, first month income for monthly columns
+    const baseIncome = isTotalColumn
+      ? incomeTotalForTotal
+      : incomeTotalForMonths;
+    if (baseIncome === 0) return '';
+
+    const percentage = (numValue / baseIncome) * 100;
+    return `${percentage.toFixed(2)}%`;
+  };
+
+  // Helper function to draw a section in monthly mode
+  const drawMonthlySection = (
+    section: MonthlySectionData | null,
+    isImportant: boolean = false
+  ) => {
+    if (!section) return;
+
+    // Check page break
+    if (yPosition + 30 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    // Section header - smaller
+    doc.setFontSize(isImportant ? 11 : 10);
+    doc.setFont('helvetica', 'bold');
+    doc.text(section.header, margin, yPosition);
+    yPosition += 6;
+
+    // Draw line under header - use tableEndX to match table width
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 4;
+
+    // Column headers - smaller font
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    let xPos = margin + labelWidth;
+    monthLabels.forEach((label) => {
+      // Truncate long labels if needed
+      const truncatedLabel = label.length > 10 ? label.substring(0, 10) : label;
+      doc.text(truncatedLabel, xPos, yPosition, { align: 'center' });
+      xPos += columnWidth;
+    });
+    doc.text('Total', xPos, yPosition, { align: 'center' });
+    yPosition += 3;
+
+    // Sub-headers: CUR and % side by side within each column
+    doc.setFontSize(6);
+    xPos = margin + labelWidth;
+    monthLabels.forEach(() => {
+      // CUR on the left, % on the right within the same column
+      const curX = xPos - columnWidth / 2 + 3; // Left side of column
+      const percentX = xPos + columnWidth / 2 - 3; // Right side of column
+      doc.text('CUR', curX, yPosition, { align: 'left' });
+      doc.text('%', percentX, yPosition, { align: 'right' });
+      xPos += columnWidth;
+    });
+    // Total column
+    const totalCurX = xPos - columnWidth / 2 + 3;
+    const totalPercentX = xPos + columnWidth / 2 - 3;
+    doc.text('CUR', totalCurX, yPosition, { align: 'left' });
+    doc.text('%', totalPercentX, yPosition, { align: 'right' });
+    yPosition += 4;
+
+    // Draw line under column headers - use tableEndX to match table width
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 3;
+
+    // Items - smaller font
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    section.items.forEach((item) => {
+      if (yPosition + lineHeight > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      const labelLines = doc.splitTextToSize(item.label, labelWidth - 3);
+      const startY = yPosition;
+
+      const rowHeight =
+        labelLines.length === 1
+          ? lineHeight
+          : (labelLines.length - 1) * lineSpacing + lineHeight;
+
+      // Draw label
+      labelLines.forEach((line: string, index: number) => {
+        doc.text(line, margin, startY + index * lineSpacing);
+      });
+
+      // Draw values and percentages side by side within each column
+      xPos = margin + labelWidth;
+      item.values.forEach((value) => {
+        const formattedValue = formatCurrency(value, currency);
+        const percentage = calculatePercentage(value);
+
+        // Value on the left, percentage on the right within the same column
+        const valueX = xPos - columnWidth / 2 + 3; // Left side of column
+        const percentX = xPos + columnWidth / 2 - 3; // Right side of column
+
+        doc.setFontSize(7);
+        doc.text(formattedValue, valueX, startY, { align: 'left' });
+
+        if (percentage) {
+          doc.setFontSize(6);
+          doc.text(percentage, percentX, startY, { align: 'right' });
+        }
+
+        xPos += columnWidth;
+      });
+
+      // Draw total value and percentage side by side
+      const totalValue = formatCurrency(item.total, currency);
+      const totalPercentage = calculatePercentage(item.total, true); // true = Total column
+      const totalValueX = xPos - columnWidth / 2 + 3;
+      const totalPercentX = xPos + columnWidth / 2 - 3;
+
+      doc.setFontSize(7);
+      doc.text(totalValue, totalValueX, startY, { align: 'left' });
+
+      if (totalPercentage) {
+        doc.setFontSize(6);
+        doc.text(totalPercentage, totalPercentX, startY, { align: 'right' });
+      }
+
+      // Draw line under row - use tableEndX instead of pageWidth - margin
+      const lastLineBaseline = startY + (labelLines.length - 1) * lineSpacing;
+      const rowBottom = lastLineBaseline + 2;
+      doc.setLineWidth(0.1);
+      doc.line(margin, rowBottom, tableEndX, rowBottom);
+
+      yPosition = startY + rowHeight;
+    });
+
+    // Total - smaller font
+    if (section.total && section.total.label && section.total.values) {
+      if (yPosition + lineHeight + 2 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      yPosition += 2;
+      doc.setFontSize(isImportant ? 10 : 9);
+      doc.setFont('helvetica', 'bold');
+      doc.text(section.total.label, margin, yPosition);
+
+      // Check if this is Cost of Sales and has target percentage
+      const isCostOfSales =
+        section.header === 'Cost of Sales' ||
+        section.total.label?.toUpperCase().includes('COST OF SALES') ||
+        section.total.label?.toUpperCase().includes('COST OF GOODS SOLD');
+      const targetPercent = isCostOfSales
+        ? targetPercentages?.costOfSales
+        : undefined;
+
+      // Draw total values and percentages side by side within each column
+      xPos = margin + labelWidth;
+      section.total.values.forEach((value) => {
+        const formattedValue = formatCurrency(value, currency);
+        const percentage = calculatePercentage(value);
+
+        // Value on the left, percentage on the right within the same column
+        const valueX = xPos - columnWidth / 2 + 3; // Left side of column
+        const percentX = xPos + columnWidth / 2 - 3; // Right side of column
+
+        doc.setFontSize(7);
+        doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+
+        if (percentage) {
+          doc.setFontSize(6);
+          doc.text(percentage, percentX, yPosition, { align: 'right' });
+        }
+
+        xPos += columnWidth;
+      });
+
+      // Draw total column value and percentage side by side
+      const totalValue = formatCurrency(section.total.total, currency);
+      const totalPercentage = calculatePercentage(section.total.total, true); // true = Total column
+      const totalValueX = xPos - columnWidth / 2 + 3;
+      const totalPercentX = xPos + columnWidth / 2 - 3;
+
+      doc.setFontSize(7);
+      doc.text(totalValue, totalValueX, yPosition, { align: 'left' });
+
+      if (totalPercentage) {
+        doc.setFontSize(6);
+        doc.text(totalPercentage, totalPercentX, yPosition, { align: 'right' });
+      }
+
+      // Draw target percentage if available (for Cost of Sales)
+      if (targetPercent !== undefined) {
+        doc.setFontSize(6);
+        doc.setFont('helvetica', 'italic');
+        const targetText = `Target: ${targetPercent.toFixed(2)}%`;
+        // Position target text below the percentage, slightly to the left
+        const targetY = yPosition + 3; // Move down slightly
+        const targetX = totalPercentX; // Use same X position as percentage
+        doc.text(targetText, targetX, targetY, { align: 'right' });
+        doc.setFont('helvetica', 'bold'); // Reset font
+      }
+
+      yPosition += lineHeight + sectionSpacing;
+    } else {
+      yPosition += sectionSpacing;
+    }
+  };
+
+  // Draw Income
+  drawMonthlySection(parsed.income);
+
+  // Draw Cost of Sales - use same font size as Income (isImportant=false)
+  drawMonthlySection(parsed.costOfSales, false);
+
+  // Draw Gross Profit - match Income section style
+  if (parsed.grossProfit) {
+    if (yPosition + 15 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    const grossProfitValue = formatCurrency(parsed.grossProfit.total, currency);
+    const grossProfitPercentage = calculatePercentage(
+      parsed.grossProfit.total,
+      true
+    ); // true = Total column
+    doc.text(parsed.grossProfit.label, margin, yPosition);
+
+    let xPos = margin + labelWidth;
+    parsed.grossProfit.values.forEach((value) => {
+      const formattedValue = formatCurrency(value, currency);
+      const percentage = calculatePercentage(value);
+
+      // Value on the left, percentage on the right within the same column (match Income style)
+      const valueX = xPos - columnWidth / 2 + 3;
+      const percentX = xPos + columnWidth / 2 - 3;
+
+      doc.setFontSize(7);
+      doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+
+      if (percentage) {
+        doc.setFontSize(6);
+        doc.text(percentage, percentX, yPosition, { align: 'right' });
+      }
+
+      xPos += columnWidth;
+    });
+
+    // Total column
+    const totalValueX = xPos - columnWidth / 2 + 3;
+    const totalPercentX = xPos + columnWidth / 2 - 3;
+
+    doc.setFontSize(7);
+    doc.text(grossProfitValue, totalValueX, yPosition, { align: 'left' });
+
+    if (grossProfitPercentage) {
+      doc.setFontSize(6);
+      doc.text(grossProfitPercentage, totalPercentX, yPosition, {
+        align: 'right',
+      });
+    }
+
+    yPosition += lineHeight + sectionSpacing;
+  }
+
+  // Draw Expenses
+  if (parsed.expenses.sections.length > 0 || parsed.expenses.total) {
+    if (yPosition + 30 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    // Expenses header - match Income section style
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Expenses', margin, yPosition);
+    yPosition += 6;
+
+    // Draw line under header - use tableEndX to match table width
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 4;
+
+    // Column headers - match Income section style
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    let xPos = margin + labelWidth;
+    monthLabels.forEach((label) => {
+      // Truncate long labels if needed
+      const truncatedLabel = label.length > 10 ? label.substring(0, 10) : label;
+      doc.text(truncatedLabel, xPos, yPosition, { align: 'center' });
+      xPos += columnWidth;
+    });
+    doc.text('Total', xPos, yPosition, { align: 'center' });
+    yPosition += 3;
+
+    // Sub-headers: CUR and % side by side within each column - match Income style
+    doc.setFontSize(6);
+    xPos = margin + labelWidth;
+    monthLabels.forEach(() => {
+      // CUR on the left, % on the right within the same column
+      const curX = xPos - columnWidth / 2 + 3;
+      const percentX = xPos + columnWidth / 2 - 3;
+      doc.text('CUR', curX, yPosition, { align: 'left' });
+      doc.text('%', percentX, yPosition, { align: 'right' });
+      xPos += columnWidth;
+    });
+    // Total column
+    const totalCurX = xPos - columnWidth / 2 + 3;
+    const totalPercentX = xPos + columnWidth / 2 - 3;
+    doc.text('CUR', totalCurX, yPosition, { align: 'left' });
+    doc.text('%', totalPercentX, yPosition, { align: 'right' });
+    yPosition += 4;
+
+    // Draw line under column headers - use tableEndX to match table width
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition - 2, tableEndX, yPosition - 2);
+    yPosition += 3;
+
+    parsed.expenses.sections.forEach((expenseSection, sectionIndex) => {
+      if (yPosition + 20 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      if (sectionIndex > 0) {
+        yPosition += 3;
+      }
+
+      // Check if this is Fixed Expense - skip items and show only total
+      const isFixedExpense = expenseSection.header
+        ?.toUpperCase()
+        .includes('FIXED');
+
+      // Sub-section header - match Income section style
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text(expenseSection.header, margin, yPosition);
+      yPosition += 6;
+
+      // Items - match Income section style - skip for Fixed Expense
+      if (!isFixedExpense) {
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        expenseSection.items.forEach((item) => {
+          if (yPosition + lineHeight > pageHeight - margin) {
+            doc.addPage();
+            yPosition = margin;
+          }
+
+          const labelLines = doc.splitTextToSize(item.label, labelWidth - 3);
+          const startY = yPosition;
+
+          const rowHeight =
+            labelLines.length === 1
+              ? lineHeight
+              : (labelLines.length - 1) * lineSpacing + lineHeight;
+
+          // Draw label
+          labelLines.forEach((line: string, index: number) => {
+            doc.text(line, margin, startY + index * lineSpacing);
+          });
+
+          // Draw values and percentages side by side within each column - match Income style
+          xPos = margin + labelWidth;
+          item.values.forEach((value) => {
+            const formattedValue = formatCurrency(value, currency);
+            const percentage = calculatePercentage(value);
+
+            // Value on the left, percentage on the right within the same column
+            const valueX = xPos - columnWidth / 2 + 3;
+            const percentX = xPos + columnWidth / 2 - 3;
+
+            doc.setFontSize(8);
+            doc.text(formattedValue, valueX, startY, { align: 'left' });
+
+            if (percentage) {
+              doc.setFontSize(6);
+              doc.text(percentage, percentX, startY, { align: 'right' });
+            }
+
+            xPos += columnWidth;
+          });
+
+          // Draw total value and percentage side by side
+          const totalValue = formatCurrency(item.total, currency);
+          const totalPercentage = calculatePercentage(item.total, true); // true = Total column
+          const totalValueX = xPos - columnWidth / 2 + 3;
+          const totalPercentX = xPos + columnWidth / 2 - 3;
+
+          doc.setFontSize(8);
+          doc.text(totalValue, totalValueX, startY, { align: 'left' });
+
+          if (totalPercentage) {
+            doc.setFontSize(6);
+            doc.text(totalPercentage, totalPercentX, startY, {
+              align: 'right',
+            });
+          }
+
+          // Draw line under row - use tableEndX to match table width
+          const lastLineBaseline =
+            startY + (labelLines.length - 1) * lineSpacing;
+          const rowBottom = lastLineBaseline + 2;
+          doc.setLineWidth(0.1);
+          doc.line(margin, rowBottom, tableEndX, rowBottom);
+
+          yPosition = startY + rowHeight;
+        });
+      }
+
+      if (
+        expenseSection.total &&
+        expenseSection.total.label &&
+        expenseSection.total.values
+      ) {
+        if (yPosition + lineHeight + 3 > pageHeight - margin) {
+          doc.addPage();
+          yPosition = margin;
+        }
+
+        yPosition += 2;
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.text(expenseSection.total.label, margin, yPosition);
+
+        // Check if this is Payroll and has target percentage
+        const isPayroll = expenseSection.total.label
+          ?.toUpperCase()
+          .includes('PAYROLL');
+        const payrollTargetPercent = isPayroll
+          ? targetPercentages?.payroll
+          : undefined;
+
+        // Draw total values and percentages side by side within each column - match Income style
+        xPos = margin + labelWidth;
+        expenseSection.total.values.forEach((value) => {
+          const formattedValue = formatCurrency(value, currency);
+          const percentage = calculatePercentage(value);
+
+          // Value on the left, percentage on the right within the same column
+          const valueX = xPos - columnWidth / 2 + 3;
+          const percentX = xPos + columnWidth / 2 - 3;
+
+          doc.setFontSize(8);
+          doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+
+          if (percentage) {
+            doc.setFontSize(6);
+            doc.text(percentage, percentX, yPosition, { align: 'right' });
+          }
+
+          xPos += columnWidth;
+        });
+
+        // Draw total column value and percentage side by side
+        const totalValue = formatCurrency(expenseSection.total.total, currency);
+        const totalPercentage = calculatePercentage(
+          expenseSection.total.total,
+          true
+        ); // true = Total column
+        const totalValueX = xPos - columnWidth / 2 + 3;
+        const totalPercentX = xPos + columnWidth / 2 - 3;
+
+        doc.setFontSize(8);
+        doc.text(totalValue, totalValueX, yPosition, { align: 'left' });
+
+        if (totalPercentage) {
+          doc.setFontSize(6);
+          doc.text(totalPercentage, totalPercentX, yPosition, {
+            align: 'right',
+          });
+        }
+
+        // Draw target percentage if available (for Payroll)
+        if (payrollTargetPercent !== undefined) {
+          doc.setFontSize(6);
+          doc.setFont('helvetica', 'italic');
+          const targetText = `Target: ${payrollTargetPercent.toFixed(1)}%`;
+          // Position target text below the percentage
+          const targetY = yPosition + 3; // Move down slightly
+          const targetX = totalPercentX; // Use same X position as percentage
+          doc.text(targetText, targetX, targetY, { align: 'right' });
+          doc.setFont('helvetica', 'bold'); // Reset font
+        }
+
+        yPosition += lineHeight + 2;
+
+        yPosition += 2;
+        doc.setLineWidth(0.2);
+        doc.line(margin, yPosition, tableEndX, yPosition);
+        yPosition += 3;
+      }
+    });
+
+    if (parsed.expenses.total) {
+      if (yPosition + lineHeight + 5 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      yPosition += 2;
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.text(parsed.expenses.total.label, margin, yPosition);
+
+      // Draw total values and percentages side by side within each column - match Income style
+      let xPos = margin + labelWidth;
+      parsed.expenses.total.values.forEach((value) => {
+        const formattedValue = formatCurrency(value, currency);
+        const percentage = calculatePercentage(value);
+
+        // Value on the left, percentage on the right within the same column
+        const valueX = xPos - columnWidth / 2 + 3;
+        const percentX = xPos + columnWidth / 2 - 3;
+
+        doc.setFontSize(7);
+        doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+
+        if (percentage) {
+          doc.setFontSize(6);
+          doc.text(percentage, percentX, yPosition, { align: 'right' });
+        }
+
+        xPos += columnWidth;
+      });
+
+      // Draw total column value and percentage side by side
+      const totalValue = formatCurrency(parsed.expenses.total.total, currency);
+      const totalPercentage = calculatePercentage(
+        parsed.expenses.total.total,
+        true
+      ); // true = Total column
+      const totalValueX = xPos - columnWidth / 2 + 3;
+      const totalPercentX = xPos + columnWidth / 2 - 3;
+
+      doc.setFontSize(7);
+      doc.text(totalValue, totalValueX, yPosition, { align: 'left' });
+
+      if (totalPercentage) {
+        doc.setFontSize(6);
+        doc.text(totalPercentage, totalPercentX, yPosition, { align: 'right' });
+      }
+
+      yPosition += lineHeight + sectionSpacing;
+    }
+  }
+
+  // Draw Other Income
+  drawMonthlySection(parsed.otherIncome);
+
+  // Draw Profit
+  if (parsed.profit) {
+    if (yPosition + 20 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    yPosition += 2;
+
+    // Profit header - match Income section style
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text(parsed.profit.label, margin, yPosition);
+
+    // Draw profit values and percentages side by side within each column - match Income style
+    let xPos = margin + labelWidth;
+    parsed.profit.values.forEach((value) => {
+      const formattedValue = formatCurrency(value, currency);
+      const percentage = calculatePercentage(value);
+
+      // Value on the left, percentage on the right within the same column
+      const valueX = xPos - columnWidth / 2 + 3;
+      const percentX = xPos + columnWidth / 2 - 3;
+
+      doc.setFontSize(7);
+      doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+
+      if (percentage) {
+        doc.setFontSize(6);
+        doc.text(percentage, percentX, yPosition, { align: 'right' });
+      }
+
+      xPos += columnWidth;
+    });
+
+    // Draw total column value and percentage side by side
+    const profitValue = formatCurrency(parsed.profit.total, currency);
+    const profitPercentage = calculatePercentage(parsed.profit.total, true); // true = Total column
+    const totalValueX = xPos - columnWidth / 2 + 3;
+    const totalPercentX = xPos + columnWidth / 2 - 3;
+
+    doc.setFontSize(7);
+    doc.text(profitValue, totalValueX, yPosition, { align: 'left' });
+
+    if (profitPercentage) {
+      doc.setFontSize(6);
+      doc.text(profitPercentage, totalPercentX, yPosition, { align: 'right' });
+    }
+
+    // Draw target percentage if available (for Profit)
+    if (targetPercentages?.profit !== undefined) {
+      doc.setFontSize(6);
+      doc.setFont('helvetica', 'italic');
+      const targetText = `Target: ${targetPercentages.profit.toFixed(2)}%`;
+      // Position target text below the percentage
+      const targetY = yPosition + 3; // Move down slightly
+      const targetX = totalPercentX; // Use same X position as percentage
+      doc.text(targetText, targetX, targetY, { align: 'right' });
+    }
+  }
+
+  const pdfOutput = doc.output('arraybuffer');
+  return new Uint8Array(pdfOutput);
+}
+
+interface MonthlySectionData {
+  header: string;
+  items: Array<{ label: string; values: string[]; total: string }>;
+  total: { label: string; values: string[]; total: string } | null;
+  isImportant?: boolean;
+}
+
+interface MonthlyExpenseSection {
+  header: string;
+  items: Array<{ label: string; values: string[]; total: string }>;
+  total: { label: string; values: string[]; total: string } | null;
+}
+
+/**
+ * Parse report data for monthly mode
+ */
+function parseReportDataMonthly(
+  reportData: ReportData,
+  numMonths: number
+): {
+  income: MonthlySectionData | null;
+  costOfSales: MonthlySectionData | null;
+  grossProfit: { label: string; values: string[]; total: string } | null;
+  expenses: {
+    sections: MonthlyExpenseSection[];
+    total: { label: string; values: string[]; total: string } | null;
+  };
+  otherIncome: MonthlySectionData | null;
+  profit: { label: string; values: string[]; total: string } | null;
+} {
+  const rows = reportData.Rows?.Row || [];
+  const columns = reportData.Columns?.Column || [];
+
+  // Extract values from ColData array (index 0 is label, 1-N are month values, last is total)
+  const getValuesFromRow = (row: any): string[] => {
+    if (row.ColData && Array.isArray(row.ColData)) {
+      // ColData structure: [label, month1, month2, ..., monthN, total]
+      // We want month1 to monthN (skip label at index 0, skip total at the end)
+      const monthValues = row.ColData.slice(1, -1); // Exclude first (label) and last (total)
+      if (monthValues.length >= numMonths) {
+        return monthValues
+          .slice(0, numMonths)
+          .map((col: any) => col?.value || '0');
+      }
+      // If structure is different, try to get numMonths values starting from index 1
+      return row.ColData.slice(1, numMonths + 1).map(
+        (col: any) => col?.value || '0'
+      );
+    }
+    return Array(numMonths).fill('0');
+  };
+
+  const getTotalFromRow = (row: any): string => {
+    if (row.ColData && Array.isArray(row.ColData)) {
+      return row.ColData[row.ColData.length - 1]?.value || '0';
+    }
+    if (row.Summary?.ColData && Array.isArray(row.Summary.ColData)) {
+      return row.Summary.ColData[row.Summary.ColData.length - 1]?.value || '0';
+    }
+    return '0';
+  };
+
+  const parseValue = (value: string): number => {
+    if (!value || value === '') return 0;
+    const num = parseFloat(value);
+    return isNaN(num) ? 0 : num;
+  };
+
+  const sumValues = (values: string[]): string => {
+    return values.reduce((sum, val) => sum + parseValue(val), 0).toString();
+  };
+
+  let income: MonthlySectionData | null = null;
+  let costOfSales: MonthlySectionData | null = null;
+  let grossProfit: { label: string; values: string[]; total: string } | null =
+    null;
+  const expenseSections: MonthlyExpenseSection[] = [];
+  let expensesTotal: { label: string; values: string[]; total: string } | null =
+    null;
+  let otherIncome: MonthlySectionData | null = null;
+  let profit: { label: string; values: string[]; total: string } | null = null;
+
+  rows.forEach((row) => {
+    const headerValue = row.Header?.ColData?.[0]?.value || '';
+    const summary = row.Summary?.ColData;
+    const summaryLabel = summary?.[0]?.value || '';
+    // Summary ColData structure: [label, month1, month2, ..., monthN, total]
+    const summaryValues = summary
+      ? summary
+          .slice(1, -1)
+          .slice(0, numMonths)
+          .map((col: any) => col?.value || '0')
+      : [];
+    const summaryTotal = summary
+      ? summary[summary.length - 1]?.value || '0'
+      : '0';
+
+    // INCOME section
+    if (headerValue.toUpperCase() === 'INCOME' || row.group === 'Income') {
+      const items = extractMonthlyItems(row.Rows?.Row || [], numMonths);
+      income = {
+        header: 'Income',
+        items,
+        total: summaryLabel
+          ? { label: summaryLabel, values: summaryValues, total: summaryTotal }
+          : null,
+      };
+    }
+
+    // COST OF GOODS SOLD / COST OF SALES section
+    if (
+      headerValue.toUpperCase().includes('COST OF GOODS SOLD') ||
+      headerValue.toUpperCase().includes('COST OF SALES') ||
+      row.group === 'COGS'
+    ) {
+      const items = extractMonthlyItems(row.Rows?.Row || [], numMonths);
+      costOfSales = {
+        header: 'Cost of Sales',
+        items,
+        total: summaryLabel
+          ? { label: summaryLabel, values: summaryValues, total: summaryTotal }
+          : null,
+        isImportant: true,
+      };
+    }
+
+    // Gross Profit
+    if (
+      summaryLabel.toUpperCase().includes('GROSS PROFIT') ||
+      summaryLabel.toUpperCase().includes('GROSS INCOME')
+    ) {
+      grossProfit = {
+        label: summaryLabel,
+        values: summaryValues,
+        total: summaryTotal,
+      };
+    }
+
+    // EXPENSES section
+    if (headerValue.toUpperCase() === 'EXPENSES' || row.group === 'Expenses') {
+      const expenseRows = row.Rows?.Row || [];
+
+      expenseRows.forEach((expenseRow: any) => {
+        const expenseHeader = expenseRow.Header?.ColData?.[0]?.value || '';
+        const expenseSummary = expenseRow.Summary?.ColData;
+        const expenseSummaryLabel = expenseSummary?.[0]?.value || '';
+        const expenseSummaryValues = expenseSummary
+          ? expenseSummary
+              .slice(1, numMonths + 1)
+              .map((col: any) => col?.value || '0')
+          : [];
+        const expenseSummaryTotal = expenseSummary
+          ? expenseSummary[expenseSummary.length - 1]?.value || '0'
+          : '0';
+
+        if (
+          expenseHeader.toUpperCase().includes('EXPENSE') &&
+          expenseRow.Rows?.Row
+        ) {
+          const items = extractMonthlyItems(expenseRow.Rows.Row, numMonths);
+          expenseSections.push({
+            header: expenseHeader,
+            items,
+            total: expenseSummaryLabel
+              ? {
+                  label: expenseSummaryLabel,
+                  values: expenseSummaryValues,
+                  total: expenseSummaryTotal,
+                }
+              : null,
+          });
+        }
+      });
+
+      if (
+        summaryLabel.toUpperCase().includes('TOTAL') &&
+        summaryLabel.toUpperCase().includes('EXPENSES')
+      ) {
+        expensesTotal = {
+          label: summaryLabel,
+          values: summaryValues,
+          total: summaryTotal,
+        };
+      }
+    }
+
+    // OTHER INCOME section
+    if (
+      headerValue.toUpperCase().includes('OTHER INCOME') ||
+      row.group === 'OtherIncome'
+    ) {
+      const items = extractMonthlyItems(row.Rows?.Row || [], numMonths);
+      otherIncome = {
+        header: 'Other Income',
+        items,
+        total: summaryLabel
+          ? { label: summaryLabel, values: summaryValues, total: summaryTotal }
+          : null,
+      };
+    }
+
+    // PROFIT
+    if (
+      summaryLabel.toUpperCase() === 'PROFIT' ||
+      summaryLabel.toUpperCase() === 'NET INCOME' ||
+      row.group === 'NetIncome'
+    ) {
+      profit = {
+        label: summaryLabel,
+        values: summaryValues,
+        total: summaryTotal,
+      };
+    }
+  });
+
+  return {
+    income,
+    costOfSales,
+    grossProfit,
+    expenses: {
+      sections: expenseSections,
+      total: expensesTotal,
+    },
+    otherIncome,
+    profit,
+  };
+}
+
+function extractMonthlyItems(
+  rows: any[],
+  numMonths: number
+): Array<{ label: string; values: string[]; total: string }> {
+  const items: Array<{ label: string; values: string[]; total: string }> = [];
+
+  if (!Array.isArray(rows)) return items;
+
+  rows.forEach((row) => {
+    // Check for Data rows (with or without type property)
+    if (
+      row.ColData &&
+      Array.isArray(row.ColData) &&
+      (!row.type || row.type === 'Data')
+    ) {
+      const label = row.ColData[0]?.value || '';
+      if (label) {
+        const values = row.ColData.slice(1, numMonths + 1).map(
+          (col: any) => col?.value || '0'
+        );
+        const total = row.ColData[row.ColData.length - 1]?.value || '0';
+        items.push({ label, values, total });
+      }
+    }
+
+    if (row.Header?.ColData && row.Rows?.Row) {
+      const headerLabel = row.Header.ColData[0]?.value || '';
+      // ColData structure: [label, month1, month2, ..., monthN, total]
+      const headerMonthValues = row.Header.ColData.slice(1, -1); // Exclude first and last
+      const headerValues =
+        headerMonthValues.length >= numMonths
+          ? headerMonthValues
+              .slice(0, numMonths)
+              .map((col: any) => col?.value || '0')
+          : row.Header.ColData.slice(1, numMonths + 1).map(
+              (col: any) => col?.value || '0'
+            );
+      const headerTotal =
+        row.Header.ColData[row.Header.ColData.length - 1]?.value || '0';
+
+      if (headerTotal && headerTotal !== '0') {
+        items.push({
+          label: headerLabel,
+          values: headerValues,
+          total: headerTotal,
+        });
+      } else {
+        if (row.Summary?.ColData) {
+          const summaryLabel = row.Summary.ColData[0]?.value || '';
+          // ColData structure: [label, month1, month2, ..., monthN, total]
+          const summaryMonthValues = row.Summary.ColData.slice(1, -1); // Exclude first and last
+          const summaryValues =
+            summaryMonthValues.length >= numMonths
+              ? summaryMonthValues
+                  .slice(0, numMonths)
+                  .map((col: any) => col?.value || '0')
+              : row.Summary.ColData.slice(1, numMonths + 1).map(
+                  (col: any) => col?.value || '0'
+                );
+          const summaryTotal =
+            row.Summary.ColData[row.Summary.ColData.length - 1]?.value || '0';
+          if (summaryLabel && summaryTotal && summaryTotal !== '0') {
+            items.push({
+              label: summaryLabel,
+              values: summaryValues,
+              total: summaryTotal,
+            });
+          }
+        }
+      }
+    }
+  });
+
+  return items;
+}
+
+/**
  * Convert PDF Uint8Array to base64 string
  */
 export function pdfToBase64(pdfBytes: Uint8Array): string {
   const binary = String.fromCharCode(...pdfBytes);
   return Buffer.from(binary, 'binary').toString('base64');
 }
-

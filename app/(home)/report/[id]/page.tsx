@@ -1,53 +1,39 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Button } from '@/components/ui/Button';
 import { fetchData } from '@/lib/fetch';
 import { toast } from 'sonner';
-import { DataTable } from '@/components/ui/DataTable';
-import { ColumnDef } from '@tanstack/react-table';
-import { FileDown, FileText, ExternalLink, CalendarIcon } from 'lucide-react';
-import { Loader } from '@/components/ui/Loader';
-import { format } from 'date-fns';
-import { Calendar } from '@/components/ui/Calendar';
+import { format, getYear } from 'date-fns';
+import { ReportTabs } from '@/components/feature/report/ReportTabs';
+import { PeriodReportForm } from '@/components/feature/report/PeriodReportForm';
+import { MonthlyReportForm } from '@/components/feature/report/MonthlyReportForm';
+import { ReportTable } from '@/components/feature/report/ReportTable';
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/Popover';
-import { cn } from '@/lib/utils';
-
-interface Report {
-  id: string;
-  connectionId: string;
-  startDate: string;
-  endDate: string;
-  createdAt: string;
-  updatedAt: string;
-  notionUrl?: string;
-  pdfUrl?: string;
-}
-
-interface QBConnection {
-  id: string;
-  realmId: string;
-  locationName: string | null;
-  hasAccess: boolean;
-}
+  Report,
+  QBConnection,
+  ReportMode,
+  SelectedMonth,
+} from '@/components/feature/report/types';
 
 const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
   const [connectionId, setConnectionId] = useState<string>('');
   const [connectionName, setConnectionName] = useState<string | null>(null);
+  const [reportMode, setReportMode] = useState<ReportMode>('period');
   const [startDate, setStartDate] = useState<Date | undefined>(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
     return date;
   });
   const [endDate, setEndDate] = useState<Date | undefined>(new Date());
+  const [selectedMonths, setSelectedMonths] = useState<SelectedMonth[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number>(getYear(new Date()));
   const [isGenerating, setIsGenerating] = useState(false);
   const [reports, setReports] = useState<Report[]>([]);
   const [isLoadingReports, setIsLoadingReports] = useState(true);
   const [downloadingPdf, setDownloadingPdf] = useState<Set<string>>(new Set());
+  const [costOfSalesTarget, setCostOfSalesTarget] = useState<string>('30');
+  const [payrollTarget, setPayrollTarget] = useState<string>('30');
+  const [profitTarget, setProfitTarget] = useState<string>('10');
 
   useEffect(() => {
     const init = async () => {
@@ -99,53 +85,119 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
       return;
     }
 
-    if (!startDate || !endDate) {
-      toast.error('Please select both start date and end date');
-      return;
-    }
+    if (reportMode === 'period') {
+      if (!startDate || !endDate) {
+        toast.error('Please select both start date and end date');
+        return;
+      }
 
-    if (startDate > endDate) {
-      toast.error('Start date must be before end date');
-      return;
+      if (startDate > endDate) {
+        toast.error('Start date must be before end date');
+        return;
+      }
+    } else {
+      if (selectedMonths.length === 0) {
+        toast.error('Please select at least one month');
+        return;
+      }
+
+      if (selectedMonths.length > 3) {
+        toast.error('You can select up to 3 months');
+        return;
+      }
     }
 
     try {
       setIsGenerating(true);
-      const startDateStr = format(startDate, 'yyyy-MM-dd');
-      const endDateStr = format(endDate, 'yyyy-MM-dd');
 
-      const response = await fetch(
-        `${
-          process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-        }/api/reports`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            connectionId,
-            startDate: startDateStr,
-            endDate: endDateStr,
-            accountingMethod: 'Accrual',
-          }),
+      if (reportMode === 'period') {
+        const startDateStr = format(startDate!, 'yyyy-MM-dd');
+        const endDateStr = format(endDate!, 'yyyy-MM-dd');
+
+        const response = await fetch(
+          `${
+            process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+          }/api/reports`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              connectionId,
+              startDate: startDateStr,
+              endDate: endDateStr,
+              accountingMethod: 'Accrual',
+              targetPercentages: {
+                costOfSales: costOfSalesTarget
+                  ? parseFloat(costOfSalesTarget)
+                  : undefined,
+                payroll: payrollTarget ? parseFloat(payrollTarget) : undefined,
+                profit: profitTarget ? parseFloat(profitTarget) : undefined,
+              },
+            }),
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to generate report');
         }
-      );
 
-      const data = await response.json();
+        toast.success('Report generated and saved to Notion successfully', {
+          action: data.report?.notionUrl
+            ? {
+                label: 'View in Notion',
+                onClick: () => window.open(data.report.notionUrl, '_blank'),
+              }
+            : undefined,
+        });
+      } else {
+        // Monthly report
+        const response = await fetch(
+          `${
+            process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+          }/api/reports`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              connectionId,
+              months: selectedMonths.map((m) => ({
+                year: m.year,
+                month: m.month + 1, // Convert 0-11 to 1-12
+              })),
+              accountingMethod: 'Accrual',
+              targetPercentages: {
+                costOfSales: costOfSalesTarget
+                  ? parseFloat(costOfSalesTarget)
+                  : undefined,
+                payroll: payrollTarget ? parseFloat(payrollTarget) : undefined,
+                profit: profitTarget ? parseFloat(profitTarget) : undefined,
+              },
+            }),
+          }
+        );
 
-      if (!response.ok) {
-        throw new Error(data?.error || 'Failed to generate report');
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to generate report');
+        }
+
+        toast.success('Report generated and saved to Notion successfully', {
+          action: data.report?.notionUrl
+            ? {
+                label: 'View in Notion',
+                onClick: () => window.open(data.report.notionUrl, '_blank'),
+              }
+            : undefined,
+        });
       }
 
-      toast.success('Report generated and saved to Notion successfully', {
-        action: data.report?.notionUrl
-          ? {
-              label: 'View in Notion',
-              onClick: () => window.open(data.report.notionUrl, '_blank'),
-            }
-          : undefined,
-      });
       fetchReports(connectionId);
     } catch (error) {
       const message =
@@ -154,6 +206,35 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const handleAddMonth = (month: number) => {
+    if (!selectedYear) {
+      toast.error('Please select a year first');
+      return;
+    }
+
+    if (selectedMonths.length >= 3) {
+      toast.error('You can select up to 3 months');
+      return;
+    }
+
+    const monthExists = selectedMonths.some(
+      (m) => m.year === selectedYear && m.month === month
+    );
+
+    if (monthExists) {
+      // 토글로 처리되므로 여기서는 에러를 표시하지 않음
+      return;
+    }
+
+    setSelectedMonths([...selectedMonths, { year: selectedYear, month }]);
+  };
+
+  const handleRemoveMonth = (year: number, month: number) => {
+    setSelectedMonths(
+      selectedMonths.filter((m) => !(m.year === year && m.month === month))
+    );
   };
 
   const handleDownloadPDF = async (reportId: string) => {
@@ -180,11 +261,21 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
       // Get the PDF blob
       const blob = await response.blob();
 
+      // Extract filename from Content-Disposition header
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = `P&L_Report_${reportId}.pdf`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1];
+        }
+      }
+
       // Create download link
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `P&L_Report_${reportId}.pdf`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -204,67 +295,6 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
     }
   };
 
-  const columns: ColumnDef<Report>[] = [
-    {
-      accessorKey: 'startDate',
-      header: 'Start Date',
-      cell: ({ row }) => {
-        const date = new Date(row.original.startDate);
-        return format(date, 'MMM dd, yyyy');
-      },
-    },
-    {
-      accessorKey: 'endDate',
-      header: 'End Date',
-      cell: ({ row }) => {
-        const date = new Date(row.original.endDate);
-        return format(date, 'MMM dd, yyyy');
-      },
-    },
-    {
-      accessorKey: 'createdAt',
-      header: 'Created At',
-      cell: ({ row }) => {
-        const date = new Date(row.original.createdAt);
-        return format(date, 'MMM dd, yyyy HH:mm');
-      },
-    },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: ({ row }) => {
-        const report = row.original;
-        const isDownloadingPdf = downloadingPdf.has(report.id);
-
-        return (
-          <div className="flex items-center gap-2">
-            {report.notionUrl && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => window.open(report.notionUrl, '_blank')}
-                disabled={isDownloadingPdf}
-              >
-                <ExternalLink className="h-4 w-4" />
-                View in Notion
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleDownloadPDF(report.id)}
-              disabled={isDownloadingPdf}
-              isLoading={isDownloadingPdf}
-            >
-              <FileDown className="h-4 w-4" />
-              Download PDF
-            </Button>
-          </div>
-        );
-      },
-    },
-  ];
-
   return (
     <div className="space-y-6 py-6">
       <div>
@@ -280,82 +310,52 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
       </div>
 
       <div className="border rounded-lg p-6 space-y-4">
-        <div className="flex items-end gap-4 flex-wrap">
-          <div className="flex-1 min-w-[200px]">
-            <label className="text-sm font-medium mb-2 block">Start Date</label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className={cn(
-                    'w-full justify-start text-left font-normal',
-                    !startDate && 'text-muted-foreground'
-                  )}
-                  disabled={isGenerating}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {startDate ? format(startDate, 'PPP') : 'Pick a date'}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="single"
-                  selected={startDate}
-                  onSelect={setStartDate}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-          <span className="pb-1.5">~</span>
-          <div className="flex-1 min-w-[200px]">
-            <label className="text-sm font-medium mb-2 block">End Date</label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className={cn(
-                    'w-full justify-start text-left font-normal',
-                    !endDate && 'text-muted-foreground'
-                  )}
-                  disabled={isGenerating}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {endDate ? format(endDate, 'PPP') : 'Pick a date'}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="single"
-                  selected={endDate}
-                  onSelect={setEndDate}
-                  initialFocus
-                  disabled={(date) => (startDate ? date < startDate : false)}
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-          <div className="flex items-end">
-            <Button
-              onClick={handleGenerateReport}
-              disabled={isGenerating || !connectionId || !startDate || !endDate}
-              isLoading={isGenerating}
-            >
-              <FileText className="h-4 w-4" />
-              Generate Report
-            </Button>
-          </div>
-        </div>
+        <ReportTabs mode={reportMode} onModeChange={setReportMode} />
+
+        {reportMode === 'period' && (
+          <PeriodReportForm
+            startDate={startDate}
+            endDate={endDate}
+            onStartDateChange={setStartDate}
+            onEndDateChange={setEndDate}
+            onGenerate={handleGenerateReport}
+            isGenerating={isGenerating}
+            connectionId={connectionId}
+            costOfSalesTarget={costOfSalesTarget}
+            payrollTarget={payrollTarget}
+            profitTarget={profitTarget}
+            onCostOfSalesTargetChange={setCostOfSalesTarget}
+            onPayrollTargetChange={setPayrollTarget}
+            onProfitTargetChange={setProfitTarget}
+          />
+        )}
+
+        {reportMode === 'monthly' && (
+          <MonthlyReportForm
+            selectedYear={selectedYear}
+            selectedMonths={selectedMonths}
+            onYearChange={setSelectedYear}
+            onAddMonth={handleAddMonth}
+            onRemoveMonth={handleRemoveMonth}
+            onGenerate={handleGenerateReport}
+            isGenerating={isGenerating}
+            connectionId={connectionId}
+            costOfSalesTarget={costOfSalesTarget}
+            payrollTarget={payrollTarget}
+            profitTarget={profitTarget}
+            onCostOfSalesTargetChange={setCostOfSalesTarget}
+            onPayrollTargetChange={setPayrollTarget}
+            onProfitTargetChange={setProfitTarget}
+          />
+        )}
       </div>
 
-      <div className="space-y-4">
-        <h2 className="text-xl font-semibold">Generated Reports</h2>
-        <DataTable
-          columns={columns}
-          data={reports}
-          isFetching={isLoadingReports}
-        />
-      </div>
+      <ReportTable
+        reports={reports}
+        isLoading={isLoadingReports}
+        downloadingPdf={downloadingPdf}
+        onDownloadPDF={handleDownloadPDF}
+      />
     </div>
   );
 };

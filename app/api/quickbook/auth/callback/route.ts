@@ -83,6 +83,11 @@ export async function GET(request: NextRequest) {
       const authResponse = await oauthClient.createToken(request.url);
       const tokenData = authResponse.getJson();
 
+      // Log token data for debugging (without sensitive info)
+      console.log('[OAuth Callback] Token data keys:', Object.keys(tokenData));
+      console.log('[OAuth Callback] RealmId from URL param:', realmId);
+      console.log('[OAuth Callback] RealmId from tokenData:', tokenData.realmId);
+
       const finalRealmId = realmId || tokenData.realmId || '';
       if (!finalRealmId) {
         const errorRedirectUrl = new URL('/admin', request.url);
@@ -94,6 +99,22 @@ export async function GET(request: NextRequest) {
         errorResponse.headers.set('Expires', '0');
         return errorResponse;
       }
+
+      // Validate realmId format (should be numeric, typically 8-15 digits)
+      // QuickBooks realmId is usually just numbers, but can sometimes have letters
+      // However, it should NOT be a very long encrypted string
+      if (finalRealmId.length > 50) {
+        console.error('[OAuth Callback] Invalid realmId format (too long):', finalRealmId.substring(0, 50) + '...');
+        return NextResponse.json(
+          { 
+            error: 'Invalid Realm ID format. Realm ID appears to be corrupted.',
+            details: 'Realm ID should be a short numeric string, not an encrypted value.'
+          },
+          { status: 400 }
+        );
+      }
+
+      console.log('[OAuth Callback] Using realmId:', finalRealmId);
 
       const tokens = {
         access_token: tokenData.access_token,

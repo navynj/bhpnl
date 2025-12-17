@@ -70,13 +70,32 @@ export async function saveQuickBooksTokens(
     : null;
 
   // Check if connection already exists for this realmId and locationName (created by this admin)
-  const existingConnection = await prisma.qBConnection.findFirst({
+  // Note: realmId is encrypted in database, so we need to get all connections and decrypt to compare
+  const allConnections = await prisma.qBConnection.findMany({
     where: {
       createdBy: adminId,
-      realmId: tokens.realmId,
       locationName: locationName || null,
     },
   });
+
+  // Find existing connection by decrypting and comparing realmId
+  let existingConnection = null;
+  for (const conn of allConnections) {
+    try {
+      const decryptedRealmId = decrypt(conn.realmId);
+      if (decryptedRealmId === tokens.realmId) {
+        existingConnection = conn;
+        break;
+      }
+    } catch (error) {
+      // If decryption fails, skip this connection
+      console.warn(
+        `Failed to decrypt realmId for connection ${conn.id}:`,
+        error
+      );
+      continue;
+    }
+  }
 
   let qbConnection: QBConnectionData;
 
@@ -157,9 +176,29 @@ export async function saveQuickBooksTokens(
   }
 
   // Decrypt sensitive data before returning
+  let decryptedRealmId: string;
+  try {
+    decryptedRealmId = decrypt(qbConnection.realmId);
+    // Validate decrypted realmId format (should be short, alphanumeric)
+    if (
+      decryptedRealmId.length > 50 ||
+      !/^[A-Za-z0-9_-]{1,50}$/.test(decryptedRealmId)
+    ) {
+      throw new Error(
+        `Decrypted realmId has invalid format (length: ${decryptedRealmId.length}). ` +
+          'This indicates the realmId was not properly stored. Please re-authenticate.'
+      );
+    }
+  } catch (error: any) {
+    throw new Error(
+      `Failed to decrypt realmId for connection ${qbConnection.id}: ${error.message}. ` +
+        'The connection may be corrupted. Please re-authenticate your QuickBooks connection.'
+    );
+  }
+
   return {
     ...qbConnection,
-    realmId: decrypt(qbConnection.realmId),
+    realmId: decryptedRealmId,
     refreshToken: decrypt(qbConnection.refreshToken),
   };
 }
@@ -188,16 +227,19 @@ export async function getQuickBooksTokens(
   // Find connection with matching realmId (decrypt to compare)
   for (const userConnection of userConnections) {
     const connection = userConnection.qbConnection;
-    
+
     // Decrypt realmId for comparison
     const decryptedRealmId = decrypt(connection.realmId);
-    
+
     if (decryptedRealmId === realmId) {
       // Check locationName if provided
-      if (locationName !== undefined && connection.locationName !== locationName) {
+      if (
+        locationName !== undefined &&
+        connection.locationName !== locationName
+      ) {
         continue;
       }
-      
+
       // Return connection with decrypted values
       return {
         ...connection,
@@ -235,11 +277,33 @@ export async function getUserQuickBooksConnections(
   });
 
   // Decrypt sensitive data before returning
-  return userConnections.map((uc) => ({
-    ...uc.qbConnection,
-    realmId: decrypt(uc.qbConnection.realmId),
-    refreshToken: decrypt(uc.qbConnection.refreshToken),
-  }));
+  return userConnections.map((uc) => {
+    let decryptedRealmId: string;
+    try {
+      decryptedRealmId = decrypt(uc.qbConnection.realmId);
+      // Validate decrypted realmId format (should be short, alphanumeric)
+      if (
+        decryptedRealmId.length > 50 ||
+        !/^[A-Za-z0-9_-]{1,50}$/.test(decryptedRealmId)
+      ) {
+        throw new Error(
+          `Decrypted realmId has invalid format (length: ${decryptedRealmId.length}). ` +
+            'This indicates the realmId in the database may be corrupted. Please re-authenticate.'
+        );
+      }
+    } catch (error: any) {
+      throw new Error(
+        `Failed to decrypt realmId for connection ${uc.qbConnection.id}: ${error.message}. ` +
+          'The connection may be corrupted. Please re-authenticate your QuickBooks connection.'
+      );
+    }
+
+    return {
+      ...uc.qbConnection,
+      realmId: decryptedRealmId,
+      refreshToken: decrypt(uc.qbConnection.refreshToken),
+    };
+  });
 }
 
 /**
@@ -267,9 +331,29 @@ export async function getQuickBooksConnectionById(
   }
 
   // Decrypt sensitive data before returning
+  let decryptedRealmId: string;
+  try {
+    decryptedRealmId = decrypt(userConnection.qbConnection.realmId);
+    // Validate decrypted realmId format (should be short, alphanumeric)
+    if (
+      decryptedRealmId.length > 50 ||
+      !/^[A-Za-z0-9_-]{1,50}$/.test(decryptedRealmId)
+    ) {
+      throw new Error(
+        `Decrypted realmId has invalid format (length: ${decryptedRealmId.length}). ` +
+          'This indicates the realmId in the database may be corrupted. Please re-authenticate.'
+      );
+    }
+  } catch (error: any) {
+    throw new Error(
+      `Failed to decrypt realmId for connection ${userConnection.qbConnection.id}: ${error.message}. ` +
+        'The connection may be corrupted. Please re-authenticate your QuickBooks connection.'
+    );
+  }
+
   return {
     ...userConnection.qbConnection,
-    realmId: decrypt(userConnection.qbConnection.realmId),
+    realmId: decryptedRealmId,
     refreshToken: decrypt(userConnection.qbConnection.refreshToken),
   };
 }

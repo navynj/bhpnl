@@ -3,6 +3,9 @@ import { auth } from '@/lib/auth';
 import { getReportFromNotionById } from '@/lib/notion-reports';
 import { generatePDFFromReportData } from '@/lib/pdf-generator';
 import { getProfitAndLossReport } from '@/lib/quickbooks-api';
+import { getQuickBooksConnectionById } from '@/lib/quickbooks-token';
+// import { writeFile } from 'fs/promises';
+// import { join } from 'path';
 
 /**
  * GET /api/reports/[id]/pdf
@@ -28,27 +31,58 @@ export async function GET(
     const report = await getReportFromNotionById(id, userId);
 
     if (!report) {
-      return NextResponse.json(
-        { error: 'Report not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Report not found' }, { status: 404 });
     }
 
-    // Fetch report data from QuickBooks in real-time
+    // Fetch report from QuickBooks
+    // For monthly reports, use summarize_column_by=Month to get monthly columns
+    const isMonthly =
+      report.isMonthly || (report.months && report.months.length > 0);
+
     const reportData = await getProfitAndLossReport(
       userId,
       report.startDate,
       report.endDate,
       'Accrual',
+      report.connectionId,
+      isMonthly ? 'Month' : undefined // Use Month summarization for monthly reports
+    );
+
+    // Save report data to txt file for debugging
+    // Commented out as requested
+    // const jsonData = JSON.stringify(reportData, null, 2);
+    // const fileName = `report_data_${id}_${report.startDate}_${
+    //   report.endDate
+    // }_${Date.now()}.txt`;
+    // const filePath = join(process.cwd(), fileName);
+
+    // try {
+    //   await writeFile(filePath, jsonData, 'utf-8');
+    //   console.log(`Report data saved to: ${filePath}`);
+    // } catch (fileError) {
+    //   console.error('Error saving report data to file:', fileError);
+    // }
+
+    // Get connection info to retrieve locationName
+    const connection = await getQuickBooksConnectionById(
+      userId,
       report.connectionId
     );
+    const locationName = connection?.locationName;
 
     // Generate PDF
     const pdfBytes = generatePDFFromReportData(
       reportData,
       report.startDate,
-      report.endDate
+      report.endDate,
+      locationName,
+      report.targetPercentages
     );
+
+    // Build PDF filename with location name and monthly indicator
+    const locationPrefix = locationName ? `${locationName}_` : '';
+    const monthlyPrefix = report.isMonthly ? 'Monthly_' : '';
+    const pdfFileName = `${locationPrefix}${monthlyPrefix}P&L_Report_${report.startDate}_${report.endDate}.pdf`;
 
     // Convert Uint8Array to Buffer
     const pdfBuffer = Buffer.from(pdfBytes);
@@ -57,7 +91,7 @@ export async function GET(
     return new NextResponse(pdfBuffer, {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="P&L_Report_${report.startDate}_${report.endDate}.pdf"`,
+        'Content-Disposition': `attachment; filename="${pdfFileName}"`,
       },
     });
   } catch (error: any) {
@@ -71,4 +105,3 @@ export async function GET(
     );
   }
 }
-

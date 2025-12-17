@@ -5,12 +5,12 @@ import { requireAdmin } from '@/lib/auth-helpers';
 /**
  * POST /api/quickbook/connections/[id]/grant
  * Grant access to a QuickBooks connection to one or more users (admin only)
- * 
+ *
  * Request body:
  * {
  *   "userIds": ["user_id_1", "user_id_2", ...]
  * }
- * 
+ *
  * Response:
  * {
  *   "success": true,
@@ -37,17 +37,16 @@ export async function POST(
       );
     }
 
-    // Verify connection exists and was created by this admin
-    const connection = await prisma.qBConnection.findFirst({
+    // Verify connection exists (any admin can grant access to any connection)
+    const connection = await prisma.qBConnection.findUnique({
       where: {
         id: connectionId,
-        createdBy: adminUser.id,
       },
     });
 
     if (!connection) {
       return NextResponse.json(
-        { error: 'Connection not found or access denied' },
+        { error: 'Connection not found' },
         { status: 404 }
       );
     }
@@ -117,7 +116,7 @@ export async function POST(
 /**
  * DELETE /api/quickbook/connections/[id]/grant
  * Revoke access to a QuickBooks connection from one or more users (admin only)
- * 
+ *
  * Request body:
  * {
  *   "userIds": ["user_id_1", "user_id_2", ...]
@@ -142,17 +141,16 @@ export async function DELETE(
       );
     }
 
-    // Verify connection exists and was created by this admin
-    const connection = await prisma.qBConnection.findFirst({
+    // Verify connection exists (any admin can revoke access from any connection)
+    const connection = await prisma.qBConnection.findUnique({
       where: {
         id: connectionId,
-        createdBy: adminUser.id,
       },
     });
 
     if (!connection) {
       return NextResponse.json(
-        { error: 'Connection not found or access denied' },
+        { error: 'Connection not found' },
         { status: 404 }
       );
     }
@@ -199,4 +197,3 @@ export async function DELETE(
     );
   }
 }
-

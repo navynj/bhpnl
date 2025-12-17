@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getUserQuickBooksConnections } from '@/lib/quickbooks-token';
 import { getCurrentUser, isAdmin } from '@/lib/auth-helpers';
 import { prisma } from '@/prisma/client';
+import { decrypt } from '@/lib/encryption';
 
 /**
  * GET /api/quickbook/connections
@@ -74,20 +75,37 @@ export async function GET(request: NextRequest) {
         userConnections.map((uc: typeof userConnections[number]) => uc.qbConnectionId)
       );
 
-      // Map connections with hasAccess flag
-      const connectionsWithAccess = allConnections.map((conn: typeof allConnections[number]) => ({
-        id: conn.id,
-        realmId: conn.realmId,
-        locationName: conn.locationName,
-        expiresAt: conn.expiresAt,
-        refreshTokenExpiresAt: conn.refreshTokenExpiresAt,
-        createdAt: conn.createdAt,
-        updatedAt: conn.updatedAt,
-        hasAccess: userConnectionIds.has(conn.id),
-        ...(userIsAdmin && conn.createdBy === userId
-          ? { createdBy: conn.createdBy, isOwner: true, admin: conn.admin }
-          : {}),
-      }));
+      // Map connections with hasAccess flag and decrypt realmId
+      const connectionsWithAccess = allConnections.map((conn: typeof allConnections[number]) => {
+        let decryptedRealmId: string;
+        try {
+          decryptedRealmId = decrypt(conn.realmId);
+          // Validate decrypted realmId format
+          if (decryptedRealmId.length > 50 || !/^[A-Za-z0-9_-]{1,50}$/.test(decryptedRealmId)) {
+            // If decryption failed or result is invalid, mark as corrupted
+            console.warn(`Invalid realmId format for connection ${conn.id}, length: ${decryptedRealmId.length}`);
+            decryptedRealmId = '[Corrupted - Please re-authenticate]';
+          }
+        } catch (error: any) {
+          // If decryption fails, mark as corrupted
+          console.error(`Failed to decrypt realmId for connection ${conn.id}:`, error.message);
+          decryptedRealmId = '[Corrupted - Please re-authenticate]';
+        }
+
+        return {
+          id: conn.id,
+          realmId: decryptedRealmId,
+          locationName: conn.locationName,
+          expiresAt: conn.expiresAt,
+          refreshTokenExpiresAt: conn.refreshTokenExpiresAt,
+          createdAt: conn.createdAt,
+          updatedAt: conn.updatedAt,
+          hasAccess: userConnectionIds.has(conn.id),
+          ...(userIsAdmin && conn.createdBy === userId
+            ? { createdBy: conn.createdBy, isOwner: true, admin: conn.admin }
+            : {}),
+        };
+      });
 
       return NextResponse.json({
         success: true,
