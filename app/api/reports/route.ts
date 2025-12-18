@@ -99,8 +99,17 @@ export async function POST(request: NextRequest) {
         Math.max(...allEndDates.map((d) => d.getTime()))
       );
 
-      const startDateStr = reportStartDate.toISOString().split('T')[0];
-      const endDateStr = reportEndDate.toISOString().split('T')[0];
+      // Format dates in local timezone to avoid timezone conversion issues
+      // toISOString() converts to UTC which can shift the date by one day
+      const formatLocalDate = (date: Date): string => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      };
+
+      const startDateStr = formatLocalDate(reportStartDate);
+      const endDateStr = formatLocalDate(reportEndDate);
 
       console.log(`[Monthly Report] Requesting single report for period: ${startDateStr} to ${endDateStr}`);
       console.log(`[Monthly Report] Selected months:`, months);

@@ -167,6 +167,15 @@ export async function createReportInNotion(
   const notion = getNotionClient();
   const notionDatabaseId = getNotionDatabaseId();
 
+  // Format dates in local timezone to avoid timezone conversion issues
+  // toISOString() converts to UTC which can shift the date by one day
+  const formatLocalDate = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   try {
     // Get connection info to retrieve locationName
     const connection = await getQuickBooksConnectionById(userId, connectionId);
@@ -176,9 +185,9 @@ export async function createReportInNotion(
     // Determine if this is a monthly report
     const isMonthly = months && months.length > 0;
     const reportType = isMonthly ? 'Monthly P&L Report' : 'P&L Report';
-    const dateRange = `(${startDate.toISOString().split('T')[0]} to ${
-      endDate.toISOString().split('T')[0]
-    })`;
+    const startDateStr = formatLocalDate(startDate);
+    const endDateStr = formatLocalDate(endDate);
+    const dateRange = `(${startDateStr} to ${endDateStr})`;
 
     // Create a page in the Notion database
     const response = await notion.pages.create({
@@ -215,12 +224,12 @@ export async function createReportInNotion(
         },
         'Start Date': {
           date: {
-            start: startDate.toISOString().split('T')[0],
+            start: startDateStr,
           },
         },
         'End Date': {
           date: {
-            start: endDate.toISOString().split('T')[0],
+            start: endDateStr,
           },
         },
         'Created At': {
@@ -253,8 +262,7 @@ export async function createReportInNotion(
     // We don't store months separately in Notion since startDate/endDate already capture the date range
 
     // Generate PDF from report data
-    const startDateStr = startDate.toISOString().split('T')[0];
-    const endDateStr = endDate.toISOString().split('T')[0];
+    // startDateStr and endDateStr are already formatted above
 
     // Create PDF download URL (will be served by API endpoint)
     const baseUrl =

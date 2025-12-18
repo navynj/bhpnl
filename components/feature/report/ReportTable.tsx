@@ -32,7 +32,23 @@ export function ReportTable({
       accessorKey: 'startDate',
       header: 'Start Date',
       cell: ({ row }) => {
-        const date = new Date(row.original.startDate);
+        // Parse date string directly to avoid timezone issues
+        // Notion returns dates in "YYYY-MM-DD" format
+        const dateStr = row.original.startDate;
+        if (!dateStr) return '-';
+
+        // Parse "YYYY-MM-DD" format directly
+        const dateMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (dateMatch) {
+          const year = parseInt(dateMatch[1], 10);
+          const month = parseInt(dateMatch[2], 10) - 1; // JavaScript months are 0-indexed
+          const day = parseInt(dateMatch[3], 10);
+          const date = new Date(year, month, day);
+          return format(date, 'MMM dd, yyyy');
+        }
+
+        // Fallback to original parsing if format is different
+        const date = new Date(dateStr);
         return format(date, 'MMM dd, yyyy');
       },
     },
@@ -40,7 +56,23 @@ export function ReportTable({
       accessorKey: 'endDate',
       header: 'End Date',
       cell: ({ row }) => {
-        const date = new Date(row.original.endDate);
+        // Parse date string directly to avoid timezone issues
+        // Notion returns dates in "YYYY-MM-DD" format
+        const dateStr = row.original.endDate;
+        if (!dateStr) return '-';
+
+        // Parse "YYYY-MM-DD" format directly
+        const dateMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (dateMatch) {
+          const year = parseInt(dateMatch[1], 10);
+          const month = parseInt(dateMatch[2], 10) - 1; // JavaScript months are 0-indexed
+          const day = parseInt(dateMatch[3], 10);
+          const date = new Date(year, month, day);
+          return format(date, 'MMM dd, yyyy');
+        }
+
+        // Fallback to original parsing if format is different
+        const date = new Date(dateStr);
         return format(date, 'MMM dd, yyyy');
       },
     },

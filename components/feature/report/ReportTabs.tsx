@@ -33,3 +33,4 @@ export function ReportTabs({ mode, onModeChange }: ReportTabsProps) {
     </div>
   );
 }
+

@@ -284,17 +284,25 @@ export function generatePDFFromReportData(
     });
 
     // Extract year and month from StartDate
+    // Parse date string directly to avoid timezone issues
+    // QuickBooks returns dates in "YYYY-MM-DD" format
     months = monthColumns
       .map((col: any) => {
         const startDateMeta = col.MetaData.find(
           (meta: any) => meta.Name === 'StartDate'
         );
         if (startDateMeta && startDateMeta.Value) {
-          const date = new Date(startDateMeta.Value);
-          return {
-            year: date.getFullYear(),
-            month: date.getMonth() + 1, // JavaScript months are 0-indexed
-          };
+          // Parse "YYYY-MM-DD" format directly to avoid timezone conversion
+          const dateStr = startDateMeta.Value;
+          const dateMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+          if (dateMatch) {
+            const year = parseInt(dateMatch[1], 10);
+            const month = parseInt(dateMatch[2], 10); // Already 1-12 format
+            return {
+              year,
+              month,
+            };
+          }
         }
         return null;
       })
