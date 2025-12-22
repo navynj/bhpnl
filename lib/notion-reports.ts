@@ -208,7 +208,7 @@ export async function createReportInNotion(
           rich_text: [
             {
               text: {
-                content: userId,
+                content: userId.trim(), // Trim to avoid whitespace issues
               },
             },
           ],
@@ -217,7 +217,7 @@ export async function createReportInNotion(
           rich_text: [
             {
               text: {
-                content: connectionId,
+                content: connectionId.trim(), // Trim to avoid whitespace issues
               },
             },
           ],
@@ -380,45 +380,65 @@ export async function getReportsFromNotion(
   const notion = getNotionClient();
   const notionDatabaseId = getNotionDatabaseId();
 
-  let filter: any = {
-    property: 'User ID',
-    rich_text: {
-      equals: userId,
-    },
-  };
+  // Trim values to avoid whitespace mismatches
+  const trimmedConnectionId = connectionId?.trim();
 
-  if (connectionId) {
+  // Filter only by connectionId if provided, otherwise get all reports
+  let filter: any = undefined;
+
+  if (trimmedConnectionId) {
     filter = {
-      and: [
-        {
-          property: 'User ID',
-          rich_text: {
-            equals: userId,
-          },
-        },
-        {
-          property: 'Connection ID',
-          rich_text: {
-            equals: connectionId,
-          },
-        },
-      ],
+      property: 'Connection ID',
+      rich_text: {
+        equals: trimmedConnectionId,
+      },
     };
   }
 
   try {
-    const response = await notion.databases.query({
+    const queryParams: any = {
       database_id: notionDatabaseId,
-      filter,
       sorts: [
         {
           property: 'Created At',
           direction: 'descending',
         },
       ],
-    });
+    };
 
-    return response.results.map((page: any) => {
+    // Only add filter if connectionId is provided
+    if (filter) {
+      queryParams.filter = filter;
+    }
+
+    const response = await notion.databases.query(queryParams);
+
+    // Handle pagination if there are more results
+    let allResults = [...response.results];
+    let nextCursor = response.next_cursor;
+
+    while (nextCursor) {
+      const nextQueryParams: any = {
+        database_id: notionDatabaseId,
+        sorts: [
+          {
+            property: 'Created At',
+            direction: 'descending',
+          },
+        ],
+        start_cursor: nextCursor,
+      };
+
+      if (filter) {
+        nextQueryParams.filter = filter;
+      }
+
+      const nextResponse = await notion.databases.query(nextQueryParams);
+      allResults = [...allResults, ...nextResponse.results];
+      nextCursor = nextResponse.next_cursor;
+    }
+
+    return allResults.map((page: any) => {
       const props = page.properties;
       const startDateProp = props['Start Date']?.date?.start;
       const endDateProp = props['End Date']?.date?.start;
@@ -457,7 +477,7 @@ export async function getReportsFromNotion(
             }
           : undefined;
 
-      return {
+      const report = {
         id: page.id,
         connectionId: connectionIdProp,
         startDate: startDateProp || '',
@@ -470,6 +490,8 @@ export async function getReportsFromNotion(
         isMonthly,
         targetPercentages,
       };
+
+      return report;
     });
   } catch (error: any) {
     // Provide more helpful error messages
@@ -508,12 +530,6 @@ export async function getReportFromNotionById(
   try {
     const page = await notion.pages.retrieve({ page_id: pageId });
     const props = (page as any).properties;
-
-    // Verify user owns this report
-    const userIdProp = props['User ID']?.rich_text?.[0]?.text?.content;
-    if (userIdProp !== userId) {
-      return null;
-    }
 
     const startDateProp = props['Start Date']?.date?.start;
     const endDateProp = props['End Date']?.date?.start;

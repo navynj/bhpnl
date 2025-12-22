@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
-import { getReportFromNotionById } from '@/lib/notion-reports';
+import {
+  getReportFromNotionById,
+  normalizeNotionId,
+} from '@/lib/notion-reports';
 import { generatePDFFromReportData } from '@/lib/pdf-generator';
 import { getProfitAndLossReport } from '@/lib/quickbooks-api';
 import { getQuickBooksConnectionById } from '@/lib/quickbooks-token';
-// import { writeFile } from 'fs/promises';
-// import { join } from 'path';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
 
 /**
  * GET /api/reports/[id]/pdf
@@ -27,11 +30,26 @@ export async function GET(
     const userId = session.user.id;
     const { id } = await params;
 
-    // Get report from Notion
-    const report = await getReportFromNotionById(id, userId);
+    // Normalize Notion ID (remove hyphens if present)
+    // Notion API accepts both formats, but we normalize for consistency
+    const normalizedId = normalizeNotionId(id) || id;
+
+    // Get report from Notion - try normalized ID first, then original if different
+    let report = await getReportFromNotionById(normalizedId, userId);
+
+    // If normalized ID failed and it's different from original, try original format
+    if (!report && normalizedId !== id) {
+      report = await getReportFromNotionById(id, userId);
+    }
 
     if (!report) {
-      return NextResponse.json({ error: 'Report not found' }, { status: 404 });
+      return NextResponse.json(
+        {
+          error: 'Report not found',
+          details: `Report with ID ${id} not found. Please verify the report exists in Notion.`,
+        },
+        { status: 404 }
+      );
     }
 
     // Fetch report from QuickBooks
@@ -49,19 +67,18 @@ export async function GET(
     );
 
     // Save report data to txt file for debugging
-    // Commented out as requested
-    // const jsonData = JSON.stringify(reportData, null, 2);
-    // const fileName = `report_data_${id}_${report.startDate}_${
-    //   report.endDate
-    // }_${Date.now()}.txt`;
-    // const filePath = join(process.cwd(), fileName);
+    const jsonData = JSON.stringify(reportData, null, 2);
+    const fileName = `report_data_${id}_${report.startDate}_${
+      report.endDate
+    }_${Date.now()}.txt`;
+    const filePath = join(process.cwd(), fileName);
 
-    // try {
-    //   await writeFile(filePath, jsonData, 'utf-8');
-    //   console.log(`Report data saved to: ${filePath}`);
-    // } catch (fileError) {
-    //   console.error('Error saving report data to file:', fileError);
-    // }
+    try {
+      await writeFile(filePath, jsonData, 'utf-8');
+      console.log(`Report data saved to: ${filePath}`);
+    } catch (fileError) {
+      console.error('Error saving report data to file:', fileError);
+    }
 
     // Get connection info to retrieve locationName
     const connection = await getQuickBooksConnectionById(

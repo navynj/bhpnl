@@ -29,7 +29,16 @@ export async function POST(
     const userId = session.user.id;
     const { id } = await params;
 
-    const report = await getReportFromNotionById(id, userId);
+    // Normalize Notion ID (remove hyphens if present)
+    const normalizedId = normalizeNotionId(id) || id;
+
+    // Get report from Notion - try normalized ID first, then original if different
+    let report = await getReportFromNotionById(normalizedId, userId);
+    
+    // If normalized ID failed and it's different from original, try original format
+    if (!report && normalizedId !== id) {
+      report = await getReportFromNotionById(id, userId);
+    }
 
     if (!report) {
       return NextResponse.json(

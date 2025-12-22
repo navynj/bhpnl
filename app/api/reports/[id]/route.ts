@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
-import { getReportFromNotionById } from '@/lib/notion-reports';
+import { getReportFromNotionById, normalizeNotionId } from '@/lib/notion-reports';
 
 /**
  * GET /api/reports/[id]
@@ -22,7 +22,17 @@ export async function GET(
     const userId = session.user.id;
     const { id } = await params;
 
-    const report = await getReportFromNotionById(id, userId);
+    // Normalize Notion ID (remove hyphens if present)
+    // Notion API accepts both formats, but we normalize for consistency
+    const normalizedId = normalizeNotionId(id) || id;
+
+    // Get report from Notion - try normalized ID first, then original if different
+    let report = await getReportFromNotionById(normalizedId, userId);
+    
+    // If normalized ID failed and it's different from original, try original format
+    if (!report && normalizedId !== id) {
+      report = await getReportFromNotionById(id, userId);
+    }
 
     if (!report) {
       return NextResponse.json(

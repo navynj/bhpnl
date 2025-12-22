@@ -73,9 +73,12 @@ const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
       );
       if (response?.success && response?.reports) {
         setReports(response.reports);
+      } else {
+        setReports([]);
       }
     } catch (error) {
       console.error('Failed to fetch reports:', error);
+      toast.error('Failed to load reports');
     }
   };
 
