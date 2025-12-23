@@ -77,10 +77,22 @@ function extractItems(rows: any[]): Array<{ label: string; value: string }> {
     // Header with nested rows (sub-sections like "Sales 01 - Clover Sales")
     if (row.Header?.ColData && row.Rows?.Row) {
       const headerLabel = row.Header.ColData[0]?.value || '';
-      const headerValue = row.Header.ColData[1]?.value || '';
+      // Check if Header has any non-empty values (excluding the label at index 0)
+      // Header ColData structure: [label, value1, value2, ..., valueN]
+      const headerValues = row.Header.ColData.slice(1); // Skip label
+      const hasHeaderValue = headerValues.some(
+        (col: any) =>
+          col?.value &&
+          col.value !== '' &&
+          col.value !== '0' &&
+          col.value !== '0.00'
+      );
+      const headerValue = hasHeaderValue
+        ? row.Header.ColData[1]?.value || ''
+        : '';
 
       // Add the header as an item if it has a value, or as a sub-section header
-      if (headerValue) {
+      if (headerValue && hasHeaderValue) {
         items.push({ label: headerLabel, value: headerValue });
       } else {
         // It's a sub-section, add its summary if available
@@ -392,9 +404,10 @@ export function generatePDFFromReportData(
 
   // Table settings
   const availableWidth = pageWidth - 2 * margin;
-  const labelWidth = availableWidth * 0.5;
-  const valueWidth = availableWidth * 0.3;
-  const percentageWidth = availableWidth * 0.2;
+  // Increase label width to accommodate longer text and prevent overflow
+  const labelWidth = availableWidth * 0.5; // Increased from 0.4 to 0.5 for better text display
+  const valueWidth = availableWidth * 0.3; // Adjusted to balance with label width
+  const percentageWidth = availableWidth * 0.2; // Adjusted to balance with label width
   // Calculate actual table end position based on actual column widths
   const tableEndX = margin + labelWidth + valueWidth + percentageWidth;
   const lineHeight = 7;
@@ -454,7 +467,10 @@ export function generatePDFFromReportData(
         yPosition = margin;
       }
 
-      const labelLines = doc.splitTextToSize(item.label, labelWidth - 5);
+      // Split text with adequate padding to ensure text doesn't overflow into amount column
+      // Use larger padding to ensure proper spacing from amount column (at least 20pt)
+      const textPadding = Math.max(20, 10 * 2); // At least 20pt for 10pt font
+      const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
       const startY = yPosition;
 
       // Calculate row height first (before drawing)
@@ -511,11 +527,30 @@ export function generatePDFFromReportData(
       const totalLabel = section.total.label;
       const totalValue = formatCurrency(section.total.value, currency);
       const totalPercentage = calculatePercentage(section.total.value);
-      doc.text(totalLabel, margin, yPosition);
-      doc.text(totalValue, margin + labelWidth, yPosition, { align: 'right' });
+      
+      // Split total label text to prevent overflow into amount column
+      // Use larger padding for bold text (bold takes more space) and ensure no overlap
+      const currentFontSize = isImportant ? 12 : 11;
+      const textPadding = Math.max(25, currentFontSize * 2.5); // At least 25pt, or 2.5x font size
+      const totalLabelLines = doc.splitTextToSize(totalLabel, labelWidth - textPadding);
+      const totalStartY = yPosition;
+      
+      // Calculate total row height
+      const totalRowHeight =
+        totalLabelLines.length === 1
+          ? lineHeight
+          : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
+      
+      // Draw total label lines
+      totalLabelLines.forEach((line: string, index: number) => {
+        doc.text(line, margin, totalStartY + index * lineSpacing);
+      });
+      
+      // Align value with the first line of total label
+      doc.text(totalValue, margin + labelWidth, totalStartY, { align: 'right' });
       if (totalPercentage) {
         doc.setFontSize(10);
-        doc.text(totalPercentage, margin + labelWidth + valueWidth, yPosition, {
+        doc.text(totalPercentage, margin + labelWidth + valueWidth, totalStartY, {
           align: 'right',
         });
         doc.setFontSize(isImportant ? 12 : 11);
@@ -527,12 +562,12 @@ export function generatePDFFromReportData(
         doc.setFont('helvetica', 'italic');
         const targetText = `Target: ${targetPercent.toFixed(2)}%`;
         const targetX = margin + labelWidth + valueWidth;
-        const targetY = yPosition + 3; // Move down slightly
+        const targetY = totalStartY + 3; // Move down slightly
         doc.text(targetText, targetX, targetY, { align: 'right' });
         doc.setFont('helvetica', 'bold'); // Reset font
       }
 
-      yPosition += lineHeight + sectionSpacing;
+      yPosition = totalStartY + totalRowHeight + sectionSpacing;
     } else {
       yPosition += sectionSpacing;
     }
@@ -648,7 +683,10 @@ export function generatePDFFromReportData(
             yPosition = margin;
           }
 
-          const labelLines = doc.splitTextToSize(item.label, labelWidth - 15);
+          // Split text with adequate padding for expense items to prevent overflow
+          // Use larger padding to ensure proper spacing from amount column (at least 20pt)
+          const textPadding = Math.max(20, 10 * 2); // At least 20pt for 10pt font
+          const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
           const startY = yPosition;
 
           // Calculate row height first (before drawing)
@@ -707,8 +745,27 @@ export function generatePDFFromReportData(
         const totalLabel = expenseSection.total.label;
         const totalValue = formatCurrency(expenseSection.total.value, currency);
         const totalPercentage = calculatePercentage(expenseSection.total.value);
-        doc.text(totalLabel, margin, yPosition);
-        doc.text(totalValue, margin + labelWidth, yPosition, {
+        
+        // Split total label text to prevent overflow into amount column
+        // Use larger padding for bold text (bold takes more space) and ensure no overlap
+        const currentFontSize = 10;
+        const textPadding = Math.max(25, currentFontSize * 2.5); // At least 25pt, or 2.5x font size
+        const totalLabelLines = doc.splitTextToSize(totalLabel, labelWidth - textPadding);
+        const totalStartY = yPosition;
+        
+        // Calculate total row height
+        const totalRowHeight =
+          totalLabelLines.length === 1
+            ? lineHeight
+            : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
+        
+        // Draw total label lines
+        totalLabelLines.forEach((line: string, index: number) => {
+          doc.text(line, margin, totalStartY + index * lineSpacing);
+        });
+        
+        // Align value with the first line of total label
+        doc.text(totalValue, margin + labelWidth, totalStartY, {
           align: 'right',
         });
         if (totalPercentage) {
@@ -716,7 +773,7 @@ export function generatePDFFromReportData(
           doc.text(
             totalPercentage,
             margin + labelWidth + valueWidth,
-            yPosition,
+            totalStartY,
             {
               align: 'right',
             }
@@ -733,12 +790,12 @@ export function generatePDFFromReportData(
           doc.setFont('helvetica', 'italic');
           const targetText = `Target: ${targetPercentages.payroll.toFixed(2)}%`;
           const targetX = margin + labelWidth + valueWidth;
-          const targetY = yPosition + 3; // Move down slightly
+          const targetY = totalStartY + 3; // Move down slightly
           doc.text(targetText, targetX, targetY, { align: 'right' });
           doc.setFont('helvetica', 'bold'); // Reset font
         }
 
-        yPosition += lineHeight + 2;
+        yPosition = totalStartY + totalRowHeight + 2;
 
         // Draw line after each expense sub-section (Expense A, B, C, D, E) total
         // This separates each expense section
@@ -764,16 +821,35 @@ export function generatePDFFromReportData(
       const totalLabel = parsed.expenses.total.label;
       const totalValue = formatCurrency(parsed.expenses.total.value, currency);
       const totalPercentage = calculatePercentage(parsed.expenses.total.value);
-      doc.text(totalLabel, margin, yPosition);
-      doc.text(totalValue, margin + labelWidth, yPosition, { align: 'right' });
+      
+      // Split total label text to prevent overflow into amount column
+      // Use larger padding for bold text (bold takes more space) and ensure no overlap
+      const currentFontSize = 11;
+      const textPadding = Math.max(25, currentFontSize * 2.5); // At least 25pt, or 2.5x font size
+      const totalLabelLines = doc.splitTextToSize(totalLabel, labelWidth - textPadding);
+      const totalStartY = yPosition;
+      
+      // Calculate total row height
+      const totalRowHeight =
+        totalLabelLines.length === 1
+          ? lineHeight
+          : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
+      
+      // Draw total label lines
+      totalLabelLines.forEach((line: string, index: number) => {
+        doc.text(line, margin, totalStartY + index * lineSpacing);
+      });
+      
+      // Align value with the first line of total label
+      doc.text(totalValue, margin + labelWidth, totalStartY, { align: 'right' });
       if (totalPercentage) {
         doc.setFontSize(10);
-        doc.text(totalPercentage, margin + labelWidth + valueWidth, yPosition, {
+        doc.text(totalPercentage, margin + labelWidth + valueWidth, totalStartY, {
           align: 'right',
         });
         doc.setFontSize(11);
       }
-      yPosition += lineHeight + sectionSpacing;
+      yPosition = totalStartY + totalRowHeight + sectionSpacing;
     }
   }
 
@@ -861,8 +937,13 @@ function generateMonthlyPDF(
   // Table settings for monthly mode - optimized for multiple months
   const availableWidth = pageWidth - 2 * margin;
   const numColumns = months.length + 1; // months + Total
-  // Reduce label width to give more space to columns and minimize left padding
-  const labelWidth = availableWidth * 0.3; // Reduced from 0.35 to minimize left padding
+  // Increase label width to accommodate longer text while still leaving space for columns
+  // Use responsive width: more space for label when fewer months, less when more months
+  const labelWidth = numColumns <= 3 
+    ? availableWidth * 0.35  // More space for label when 3 or fewer months
+    : numColumns <= 5
+    ? availableWidth * 0.3    // Moderate space for 4-5 months
+    : availableWidth * 0.25;  // Less space for 6+ months
   // Calculate column width to fill the entire available space
   // Since we use column centers (xPos), the last column's right edge should be at pageWidth - margin
   // Last column center = margin + labelWidth + (numColumns - 1) * columnWidth
@@ -999,7 +1080,10 @@ function generateMonthlyPDF(
         yPosition = margin;
       }
 
-      const labelLines = doc.splitTextToSize(item.label, labelWidth - 3);
+      // Split text with adequate padding to ensure text doesn't overflow into amount columns
+      // Use responsive padding based on label width
+      const textPadding = labelWidth * 0.15; // 15% of label width for padding
+      const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
       const startY = yPosition;
 
       const rowHeight =
@@ -1066,7 +1150,22 @@ function generateMonthlyPDF(
       yPosition += 2;
       doc.setFontSize(isImportant ? 10 : 9);
       doc.setFont('helvetica', 'bold');
-      doc.text(section.total.label, margin, yPosition);
+      
+      // Split total label text to prevent overflow into amount columns
+      const textPadding = labelWidth * 0.15; // 15% of label width for padding
+      const totalLabelLines = doc.splitTextToSize(section.total.label, labelWidth - textPadding);
+      const totalStartY = yPosition;
+      
+      // Calculate total row height
+      const totalRowHeight =
+        totalLabelLines.length === 1
+          ? lineHeight
+          : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
+      
+      // Draw total label lines
+      totalLabelLines.forEach((line: string, index: number) => {
+        doc.text(line, margin, totalStartY + index * lineSpacing);
+      });
 
       // Check if this is Cost of Sales and has target percentage
       const isCostOfSales =
@@ -1078,6 +1177,7 @@ function generateMonthlyPDF(
         : undefined;
 
       // Draw total values and percentages side by side within each column
+      // Align with the first line of total label
       xPos = margin + labelWidth;
       section.total.values.forEach((value) => {
         const formattedValue = formatCurrency(value, currency);
@@ -1088,11 +1188,11 @@ function generateMonthlyPDF(
         const percentX = xPos + columnWidth / 2 - 3; // Right side of column
 
         doc.setFontSize(7);
-        doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+        doc.text(formattedValue, valueX, totalStartY, { align: 'left' });
 
         if (percentage) {
           doc.setFontSize(6);
-          doc.text(percentage, percentX, yPosition, { align: 'right' });
+          doc.text(percentage, percentX, totalStartY, { align: 'right' });
         }
 
         xPos += columnWidth;
@@ -1105,11 +1205,11 @@ function generateMonthlyPDF(
       const totalPercentX = xPos + columnWidth / 2 - 3;
 
       doc.setFontSize(7);
-      doc.text(totalValue, totalValueX, yPosition, { align: 'left' });
+      doc.text(totalValue, totalValueX, totalStartY, { align: 'left' });
 
       if (totalPercentage) {
         doc.setFontSize(6);
-        doc.text(totalPercentage, totalPercentX, yPosition, { align: 'right' });
+        doc.text(totalPercentage, totalPercentX, totalStartY, { align: 'right' });
       }
 
       // Draw target percentage if available (for Cost of Sales)
@@ -1118,13 +1218,13 @@ function generateMonthlyPDF(
         doc.setFont('helvetica', 'italic');
         const targetText = `Target: ${targetPercent.toFixed(2)}%`;
         // Position target text below the percentage, slightly to the left
-        const targetY = yPosition + 3; // Move down slightly
+        const targetY = totalStartY + 3; // Move down slightly
         const targetX = totalPercentX; // Use same X position as percentage
         doc.text(targetText, targetX, targetY, { align: 'right' });
         doc.setFont('helvetica', 'bold'); // Reset font
       }
 
-      yPosition += lineHeight + sectionSpacing;
+      yPosition = totalStartY + totalRowHeight + sectionSpacing;
     } else {
       yPosition += sectionSpacing;
     }
@@ -1274,7 +1374,10 @@ function generateMonthlyPDF(
             yPosition = margin;
           }
 
-          const labelLines = doc.splitTextToSize(item.label, labelWidth - 3);
+          // Split text with adequate padding for expense items to prevent overflow
+          // Use responsive padding based on label width
+          const textPadding = labelWidth * 0.15; // 15% of label width for padding
+          const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
           const startY = yPosition;
 
           const rowHeight =
@@ -1348,7 +1451,27 @@ function generateMonthlyPDF(
         yPosition += 2;
         doc.setFontSize(9);
         doc.setFont('helvetica', 'bold');
-        doc.text(expenseSection.total.label, margin, yPosition);
+        
+        // Split total label text to prevent overflow into amount columns
+        // Use larger padding for bold text (bold takes more space) and ensure no overlap
+        const currentFontSize = 9;
+        // Use percentage of label width but ensure minimum padding
+        const minPadding = Math.max(20, currentFontSize * 2.5); // At least 20pt, or 2.5x font size
+        const percentPadding = labelWidth * 0.2; // 20% of label width
+        const textPadding = Math.max(minPadding, percentPadding);
+        const totalLabelLines = doc.splitTextToSize(expenseSection.total.label, labelWidth - textPadding);
+        const totalStartY = yPosition;
+        
+        // Calculate total row height
+        const totalRowHeight =
+          totalLabelLines.length === 1
+            ? lineHeight
+            : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
+        
+        // Draw total label lines
+        totalLabelLines.forEach((line: string, index: number) => {
+          doc.text(line, margin, totalStartY + index * lineSpacing);
+        });
 
         // Check if this is Payroll and has target percentage
         const isPayroll = expenseSection.total.label
@@ -1359,6 +1482,7 @@ function generateMonthlyPDF(
           : undefined;
 
         // Draw total values and percentages side by side within each column - match Income style
+        // Align with the first line of total label
         xPos = margin + labelWidth;
         expenseSection.total.values.forEach((value) => {
           const formattedValue = formatCurrency(value, currency);
@@ -1369,11 +1493,11 @@ function generateMonthlyPDF(
           const percentX = xPos + columnWidth / 2 - 3;
 
           doc.setFontSize(8);
-          doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+          doc.text(formattedValue, valueX, totalStartY, { align: 'left' });
 
           if (percentage) {
             doc.setFontSize(6);
-            doc.text(percentage, percentX, yPosition, { align: 'right' });
+            doc.text(percentage, percentX, totalStartY, { align: 'right' });
           }
 
           xPos += columnWidth;
@@ -1389,11 +1513,11 @@ function generateMonthlyPDF(
         const totalPercentX = xPos + columnWidth / 2 - 3;
 
         doc.setFontSize(8);
-        doc.text(totalValue, totalValueX, yPosition, { align: 'left' });
+        doc.text(totalValue, totalValueX, totalStartY, { align: 'left' });
 
         if (totalPercentage) {
           doc.setFontSize(6);
-          doc.text(totalPercentage, totalPercentX, yPosition, {
+          doc.text(totalPercentage, totalPercentX, totalStartY, {
             align: 'right',
           });
         }
@@ -1404,13 +1528,13 @@ function generateMonthlyPDF(
           doc.setFont('helvetica', 'italic');
           const targetText = `Target: ${payrollTargetPercent.toFixed(1)}%`;
           // Position target text below the percentage
-          const targetY = yPosition + 3; // Move down slightly
+          const targetY = totalStartY + 3; // Move down slightly
           const targetX = totalPercentX; // Use same X position as percentage
           doc.text(targetText, targetX, targetY, { align: 'right' });
           doc.setFont('helvetica', 'bold'); // Reset font
         }
 
-        yPosition += lineHeight + 2;
+        yPosition = totalStartY + totalRowHeight + 2;
 
         yPosition += 2;
         doc.setLineWidth(0.2);
@@ -1428,9 +1552,30 @@ function generateMonthlyPDF(
       yPosition += 2;
       doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
-      doc.text(parsed.expenses.total.label, margin, yPosition);
+      
+      // Split total label text to prevent overflow into amount columns
+      // Use larger padding for bold text (bold takes more space) and ensure no overlap
+      const currentFontSize = 9;
+      // Use percentage of label width but ensure minimum padding
+      const minPadding = Math.max(20, currentFontSize * 2.5); // At least 20pt, or 2.5x font size
+      const percentPadding = labelWidth * 0.2; // 20% of label width
+      const textPadding = Math.max(minPadding, percentPadding);
+      const totalLabelLines = doc.splitTextToSize(parsed.expenses.total.label, labelWidth - textPadding);
+      const totalStartY = yPosition;
+      
+      // Calculate total row height
+      const totalRowHeight =
+        totalLabelLines.length === 1
+          ? lineHeight
+          : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
+      
+      // Draw total label lines
+      totalLabelLines.forEach((line: string, index: number) => {
+        doc.text(line, margin, totalStartY + index * lineSpacing);
+      });
 
       // Draw total values and percentages side by side within each column - match Income style
+      // Align with the first line of total label
       let xPos = margin + labelWidth;
       parsed.expenses.total.values.forEach((value) => {
         const formattedValue = formatCurrency(value, currency);
@@ -1441,11 +1586,11 @@ function generateMonthlyPDF(
         const percentX = xPos + columnWidth / 2 - 3;
 
         doc.setFontSize(7);
-        doc.text(formattedValue, valueX, yPosition, { align: 'left' });
+        doc.text(formattedValue, valueX, totalStartY, { align: 'left' });
 
         if (percentage) {
           doc.setFontSize(6);
-          doc.text(percentage, percentX, yPosition, { align: 'right' });
+          doc.text(percentage, percentX, totalStartY, { align: 'right' });
         }
 
         xPos += columnWidth;
@@ -1461,14 +1606,14 @@ function generateMonthlyPDF(
       const totalPercentX = xPos + columnWidth / 2 - 3;
 
       doc.setFontSize(7);
-      doc.text(totalValue, totalValueX, yPosition, { align: 'left' });
+      doc.text(totalValue, totalValueX, totalStartY, { align: 'left' });
 
       if (totalPercentage) {
         doc.setFontSize(6);
-        doc.text(totalPercentage, totalPercentX, yPosition, { align: 'right' });
+        doc.text(totalPercentage, totalPercentX, totalStartY, { align: 'right' });
       }
 
-      yPosition += lineHeight + sectionSpacing;
+      yPosition = totalStartY + totalRowHeight + sectionSpacing;
     }
   }
 
@@ -1808,13 +1953,27 @@ function extractMonthlyItems(
       const headerTotal =
         row.Header.ColData[row.Header.ColData.length - 1]?.value || '0';
 
-      if (headerTotal && headerTotal !== '0') {
+      // Check if Header has any non-empty values (excluding the label at index 0)
+      // Header values are considered empty if all are empty, '0', or '0.00'
+      const hasHeaderValue =
+        headerValues.some(
+          (val: string) => val && val !== '' && val !== '0' && val !== '0.00'
+        ) ||
+        (headerTotal && headerTotal !== '0' && headerTotal !== '0.00');
+
+      if (
+        hasHeaderValue &&
+        headerTotal &&
+        headerTotal !== '0' &&
+        headerTotal !== '0.00'
+      ) {
         items.push({
           label: headerLabel,
           values: headerValues,
           total: headerTotal,
         });
       } else {
+        // Use Summary instead when Header values are empty
         if (row.Summary?.ColData) {
           const summaryLabel = row.Summary.ColData[0]?.value || '';
           // ColData structure: [label, month1, month2, ..., monthN, total]

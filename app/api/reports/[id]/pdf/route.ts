@@ -7,8 +7,8 @@ import {
 import { generatePDFFromReportData } from '@/lib/pdf-generator';
 import { getProfitAndLossReport } from '@/lib/quickbooks-api';
 import { getQuickBooksConnectionById } from '@/lib/quickbooks-token';
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
+// import { writeFile } from 'fs/promises';
+// import { join } from 'path';
 
 /**
  * GET /api/reports/[id]/pdf
@@ -67,18 +67,18 @@ export async function GET(
     );
 
     // Save report data to txt file for debugging
-    const jsonData = JSON.stringify(reportData, null, 2);
-    const fileName = `report_data_${id}_${report.startDate}_${
-      report.endDate
-    }_${Date.now()}.txt`;
-    const filePath = join(process.cwd(), fileName);
+    // const jsonData = JSON.stringify(reportData, null, 2);
+    // const fileName = `report_data_${id}_${report.startDate}_${
+    //   report.endDate
+    // }_${Date.now()}.txt`;
+    // const filePath = join(process.cwd(), fileName);
 
-    try {
-      await writeFile(filePath, jsonData, 'utf-8');
-      console.log(`Report data saved to: ${filePath}`);
-    } catch (fileError) {
-      console.error('Error saving report data to file:', fileError);
-    }
+    // try {
+    //   await writeFile(filePath, jsonData, 'utf-8');
+    //   console.log(`Report data saved to: ${filePath}`);
+    // } catch (fileError) {
+    //   console.error('Error saving report data to file:', fileError);
+    // }
 
     // Get connection info to retrieve locationName
     const connection = await getQuickBooksConnectionById(
