@@ -28,14 +28,14 @@ export interface ReportData {
 
 interface SectionData {
   header: string;
-  items: Array<{ label: string; value: string }>;
+  items: Array<{ label: string; value: string; indent?: number }>;
   total: { label: string; value: string };
   isImportant?: boolean;
 }
 
 interface ExpenseSection {
   header: string;
-  items: Array<{ label: string; value: string }>;
+  items: Array<{ label: string; value: string; indent?: number }>;
   total: { label: string; value: string };
 }
 
@@ -59,8 +59,12 @@ function formatCurrency(value: string, currency: string = 'CAD'): string {
 /**
  * Extract items from a row structure
  */
-function extractItems(rows: any[]): Array<{ label: string; value: string }> {
-  const items: Array<{ label: string; value: string }> = [];
+function extractItems(
+  rows: any[],
+  expenseSectionHeader?: string,
+  indentLevel: number = 0
+): Array<{ label: string; value: string; indent?: number }> {
+  const items: Array<{ label: string; value: string; indent?: number }> = [];
 
   if (!Array.isArray(rows)) return items;
 
@@ -70,13 +74,72 @@ function extractItems(rows: any[]): Array<{ label: string; value: string }> {
       const label = row.ColData[0]?.value || '';
       const value = row.ColData[1]?.value || '';
       if (label) {
-        items.push({ label, value });
+        // Filter out excluded items
+        // Exclude E17 Payroll Expenses (only exact "E17 Payroll Expenses" section, not other payroll items)
+        const upperLabel = label.toUpperCase();
+        if (
+          upperLabel === 'E17 PAYROLL EXPENSES' ||
+          (upperLabel.startsWith('E17') &&
+            upperLabel.includes('PAYROLL EXPENSES') &&
+            !upperLabel.includes('L'))
+        ) {
+          return;
+        }
+        // Exclude Online Subscription Fee from Expenses C
+        if (
+          expenseSectionHeader?.toUpperCase().includes('EXPENSE C') &&
+          label.toUpperCase().includes('ONLINE SUBSCRIPTION')
+        ) {
+          return;
+        }
+        // Exclude Travel & conference from Expenses E
+        if (
+          expenseSectionHeader?.toUpperCase().includes('EXPENSE E') &&
+          label.toUpperCase().includes('TRAVEL') &&
+          label.toUpperCase().includes('CONFERENCE')
+        ) {
+          return;
+        }
+        items.push({
+          label,
+          value,
+          indent: indentLevel > 0 ? indentLevel : undefined,
+        });
       }
     }
 
     // Header with nested rows (sub-sections like "Sales 01 - Clover Sales")
     if (row.Header?.ColData && row.Rows?.Row) {
       const headerLabel = row.Header.ColData[0]?.value || '';
+
+      // Exclude E17 Payroll Expenses section entirely (only exact "E17 Payroll Expenses" section, not other payroll items)
+      const upperHeaderLabel = headerLabel.toUpperCase();
+      if (
+        upperHeaderLabel === 'E17 PAYROLL EXPENSES' ||
+        (upperHeaderLabel.startsWith('E17') &&
+          upperHeaderLabel.includes('PAYROLL EXPENSES') &&
+          !upperHeaderLabel.includes('L'))
+      ) {
+        return;
+      }
+
+      // Exclude Online Subscription from Expenses C (check header label)
+      if (
+        expenseSectionHeader?.toUpperCase().includes('EXPENSE C') &&
+        headerLabel.toUpperCase().includes('ONLINE SUBSCRIPTION')
+      ) {
+        return;
+      }
+
+      // Exclude Travel & conference from Expenses E (check header label)
+      if (
+        expenseSectionHeader?.toUpperCase().includes('EXPENSE E') &&
+        headerLabel.toUpperCase().includes('TRAVEL') &&
+        headerLabel.toUpperCase().includes('CONFERENCE')
+      ) {
+        return;
+      }
+
       // Check if Header has any non-empty values (excluding the label at index 0)
       // Header ColData structure: [label, value1, value2, ..., valueN]
       const headerValues = row.Header.ColData.slice(1); // Skip label
@@ -91,6 +154,26 @@ function extractItems(rows: any[]): Array<{ label: string; value: string }> {
         ? row.Header.ColData[1]?.value || ''
         : '';
 
+      // Check if this is a Payroll/Wages section - if so, always extract nested items for detailed display
+      const isPayrollSection =
+        expenseSectionHeader?.toUpperCase().includes('PAYROLL') ||
+        headerLabel.toUpperCase().includes('PAYROLL') ||
+        headerLabel.toUpperCase().includes('WAGES') ||
+        headerLabel.toUpperCase().includes('WAGE');
+
+      // For Payroll sections, add the header first (if it has a value), then add nested items with indentation
+      if (isPayrollSection && row.Rows?.Row && Array.isArray(row.Rows.Row)) {
+        // Add the header first if it has a value
+        if (headerValue && hasHeaderValue) {
+          items.push({ label: headerLabel, value: headerValue });
+        }
+        // Then add nested items with indentation
+        const nestedItems = extractItems(row.Rows.Row, expenseSectionHeader, 1);
+        items.push(...nestedItems);
+        // Skip the summary for Payroll sections as we show individual items
+        return;
+      }
+
       // Add the header as an item if it has a value, or as a sub-section header
       if (headerValue && hasHeaderValue) {
         items.push({ label: headerLabel, value: headerValue });
@@ -100,6 +183,20 @@ function extractItems(rows: any[]): Array<{ label: string; value: string }> {
           const summaryLabel = row.Summary.ColData[0]?.value || '';
           const summaryValue = row.Summary.ColData[1]?.value || '';
           if (summaryLabel && summaryValue) {
+            // Also filter summary labels
+            if (
+              expenseSectionHeader?.toUpperCase().includes('EXPENSE C') &&
+              summaryLabel.toUpperCase().includes('ONLINE SUBSCRIPTION')
+            ) {
+              return;
+            }
+            if (
+              expenseSectionHeader?.toUpperCase().includes('EXPENSE E') &&
+              summaryLabel.toUpperCase().includes('TRAVEL') &&
+              summaryLabel.toUpperCase().includes('CONFERENCE')
+            ) {
+              return;
+            }
             items.push({ label: summaryLabel, value: summaryValue });
           }
         }
@@ -189,7 +286,18 @@ function parseReportData(reportData: ReportData): {
           expenseHeader.toUpperCase().includes('EXPENSE') &&
           expenseRow.Rows?.Row
         ) {
-          const items = extractItems(expenseRow.Rows.Row);
+          // Exclude E17 Payroll Expenses section entirely (only exact "E17 Payroll Expenses" section, not other payroll items)
+          const upperExpenseHeader = expenseHeader.toUpperCase();
+          if (
+            upperExpenseHeader === 'E17 PAYROLL EXPENSES' ||
+            (upperExpenseHeader.startsWith('E17') &&
+              upperExpenseHeader.includes('PAYROLL EXPENSES') &&
+              !upperExpenseHeader.includes('L'))
+          ) {
+            return;
+          }
+
+          const items = extractItems(expenseRow.Rows.Row, expenseHeader);
           expenseSections.push({
             header: expenseHeader,
             items,
@@ -465,12 +573,18 @@ export function generatePDFFromReportData(
       if (yPosition + lineHeight > pageHeight - margin) {
         doc.addPage();
         yPosition = margin;
+        // Reset font size after page break
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
       }
 
       // Split text with adequate padding to ensure text doesn't overflow into amount column
       // Use larger padding to ensure proper spacing from amount column (at least 20pt)
       const textPadding = Math.max(20, 10 * 2); // At least 20pt for 10pt font
-      const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
+      const labelLines = doc.splitTextToSize(
+        item.label,
+        labelWidth - textPadding
+      );
       const startY = yPosition;
 
       // Calculate row height first (before drawing)
@@ -527,32 +641,44 @@ export function generatePDFFromReportData(
       const totalLabel = section.total.label;
       const totalValue = formatCurrency(section.total.value, currency);
       const totalPercentage = calculatePercentage(section.total.value);
-      
+
       // Split total label text to prevent overflow into amount column
       // Use larger padding for bold text (bold takes more space) and ensure no overlap
       const currentFontSize = isImportant ? 12 : 11;
-      const textPadding = Math.max(25, currentFontSize * 2.5); // At least 25pt, or 2.5x font size
-      const totalLabelLines = doc.splitTextToSize(totalLabel, labelWidth - textPadding);
+      // Increase padding significantly to ensure text never overlaps with value column
+      // Bold text takes more space, and we need extra margin for safety
+      const textPadding = Math.max(35, currentFontSize * 3.5); // At least 35pt, or 3.5x font size for better safety
+      const totalLabelLines = doc.splitTextToSize(
+        totalLabel,
+        labelWidth - textPadding
+      );
       const totalStartY = yPosition;
-      
+
       // Calculate total row height
       const totalRowHeight =
         totalLabelLines.length === 1
           ? lineHeight
           : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
-      
+
       // Draw total label lines
       totalLabelLines.forEach((line: string, index: number) => {
         doc.text(line, margin, totalStartY + index * lineSpacing);
       });
-      
+
       // Align value with the first line of total label
-      doc.text(totalValue, margin + labelWidth, totalStartY, { align: 'right' });
+      doc.text(totalValue, margin + labelWidth, totalStartY, {
+        align: 'right',
+      });
       if (totalPercentage) {
         doc.setFontSize(10);
-        doc.text(totalPercentage, margin + labelWidth + valueWidth, totalStartY, {
-          align: 'right',
-        });
+        doc.text(
+          totalPercentage,
+          margin + labelWidth + valueWidth,
+          totalStartY,
+          {
+            align: 'right',
+          }
+        );
         doc.setFontSize(isImportant ? 12 : 11);
       }
 
@@ -681,12 +807,19 @@ export function generatePDFFromReportData(
           if (yPosition + lineHeight > pageHeight - margin) {
             doc.addPage();
             yPosition = margin;
+            // Reset font size after page break
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
           }
 
           // Split text with adequate padding for expense items to prevent overflow
           // Use larger padding to ensure proper spacing from amount column (at least 20pt)
+          const indentOffset = item.indent ? item.indent * 10 : 0; // 10pt per indent level
           const textPadding = Math.max(20, 10 * 2); // At least 20pt for 10pt font
-          const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
+          const labelLines = doc.splitTextToSize(
+            item.label,
+            labelWidth - textPadding - indentOffset
+          );
           const startY = yPosition;
 
           // Calculate row height first (before drawing)
@@ -696,14 +829,21 @@ export function generatePDFFromReportData(
               ? lineHeight
               : (labelLines.length - 1) * lineSpacing + lineHeight;
 
-          // Draw all text first
+          // Draw all text first with indentation if needed
           labelLines.forEach((line: string, index: number) => {
-            doc.text(line, margin + 10, startY + index * lineSpacing);
+            doc.text(
+              line,
+              margin + 10 + indentOffset,
+              startY + index * lineSpacing
+            );
           });
 
           const value = formatCurrency(item.value, currency);
           const percentage = calculatePercentage(item.value);
           // Align value with the first line of label
+          // Ensure font size is correct for value
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'normal');
           doc.text(value, margin + labelWidth, startY, { align: 'right' });
           if (percentage) {
             doc.setFontSize(9);
@@ -711,6 +851,7 @@ export function generatePDFFromReportData(
               align: 'right',
             });
             doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
           }
 
           // Calculate the bottom of the row
@@ -745,25 +886,29 @@ export function generatePDFFromReportData(
         const totalLabel = expenseSection.total.label;
         const totalValue = formatCurrency(expenseSection.total.value, currency);
         const totalPercentage = calculatePercentage(expenseSection.total.value);
-        
+
         // Split total label text to prevent overflow into amount column
         // Use larger padding for bold text (bold takes more space) and ensure no overlap
         const currentFontSize = 10;
-        const textPadding = Math.max(25, currentFontSize * 2.5); // At least 25pt, or 2.5x font size
-        const totalLabelLines = doc.splitTextToSize(totalLabel, labelWidth - textPadding);
+        // Increase padding significantly to ensure text never overlaps with value column
+        const textPadding = Math.max(35, currentFontSize * 3.5); // At least 35pt, or 3.5x font size for better safety
+        const totalLabelLines = doc.splitTextToSize(
+          totalLabel,
+          labelWidth - textPadding
+        );
         const totalStartY = yPosition;
-        
+
         // Calculate total row height
         const totalRowHeight =
           totalLabelLines.length === 1
             ? lineHeight
             : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
-        
+
         // Draw total label lines
         totalLabelLines.forEach((line: string, index: number) => {
           doc.text(line, margin, totalStartY + index * lineSpacing);
         });
-        
+
         // Align value with the first line of total label
         doc.text(totalValue, margin + labelWidth, totalStartY, {
           align: 'right',
@@ -821,32 +966,43 @@ export function generatePDFFromReportData(
       const totalLabel = parsed.expenses.total.label;
       const totalValue = formatCurrency(parsed.expenses.total.value, currency);
       const totalPercentage = calculatePercentage(parsed.expenses.total.value);
-      
+
       // Split total label text to prevent overflow into amount column
       // Use larger padding for bold text (bold takes more space) and ensure no overlap
       const currentFontSize = 11;
-      const textPadding = Math.max(25, currentFontSize * 2.5); // At least 25pt, or 2.5x font size
-      const totalLabelLines = doc.splitTextToSize(totalLabel, labelWidth - textPadding);
+      // Increase padding significantly to ensure text never overlaps with value column
+      const textPadding = Math.max(35, currentFontSize * 3.5); // At least 35pt, or 3.5x font size for better safety
+      const totalLabelLines = doc.splitTextToSize(
+        totalLabel,
+        labelWidth - textPadding
+      );
       const totalStartY = yPosition;
-      
+
       // Calculate total row height
       const totalRowHeight =
         totalLabelLines.length === 1
           ? lineHeight
           : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
-      
+
       // Draw total label lines
       totalLabelLines.forEach((line: string, index: number) => {
         doc.text(line, margin, totalStartY + index * lineSpacing);
       });
-      
+
       // Align value with the first line of total label
-      doc.text(totalValue, margin + labelWidth, totalStartY, { align: 'right' });
+      doc.text(totalValue, margin + labelWidth, totalStartY, {
+        align: 'right',
+      });
       if (totalPercentage) {
         doc.setFontSize(10);
-        doc.text(totalPercentage, margin + labelWidth + valueWidth, totalStartY, {
-          align: 'right',
-        });
+        doc.text(
+          totalPercentage,
+          margin + labelWidth + valueWidth,
+          totalStartY,
+          {
+            align: 'right',
+          }
+        );
         doc.setFontSize(11);
       }
       yPosition = totalStartY + totalRowHeight + sectionSpacing;
@@ -939,11 +1095,12 @@ function generateMonthlyPDF(
   const numColumns = months.length + 1; // months + Total
   // Increase label width to accommodate longer text while still leaving space for columns
   // Use responsive width: more space for label when fewer months, less when more months
-  const labelWidth = numColumns <= 3 
-    ? availableWidth * 0.35  // More space for label when 3 or fewer months
-    : numColumns <= 5
-    ? availableWidth * 0.3    // Moderate space for 4-5 months
-    : availableWidth * 0.25;  // Less space for 6+ months
+  const labelWidth =
+    numColumns <= 3
+      ? availableWidth * 0.35 // More space for label when 3 or fewer months
+      : numColumns <= 5
+      ? availableWidth * 0.3 // Moderate space for 4-5 months
+      : availableWidth * 0.25; // Less space for 6+ months
   // Calculate column width to fill the entire available space
   // Since we use column centers (xPos), the last column's right edge should be at pageWidth - margin
   // Last column center = margin + labelWidth + (numColumns - 1) * columnWidth
@@ -1078,12 +1235,19 @@ function generateMonthlyPDF(
       if (yPosition + lineHeight > pageHeight - margin) {
         doc.addPage();
         yPosition = margin;
+        // Reset font size after page break
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
       }
 
       // Split text with adequate padding to ensure text doesn't overflow into amount columns
       // Use responsive padding based on label width
+      const indentOffset = item.indent ? item.indent * 8 : 0; // 8pt per indent level for monthly mode
       const textPadding = labelWidth * 0.15; // 15% of label width for padding
-      const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
+      const labelLines = doc.splitTextToSize(
+        item.label,
+        labelWidth - textPadding - indentOffset
+      );
       const startY = yPosition;
 
       const rowHeight =
@@ -1091,9 +1255,9 @@ function generateMonthlyPDF(
           ? lineHeight
           : (labelLines.length - 1) * lineSpacing + lineHeight;
 
-      // Draw label
+      // Draw label with indentation if needed
       labelLines.forEach((line: string, index: number) => {
-        doc.text(line, margin, startY + index * lineSpacing);
+        doc.text(line, margin + indentOffset, startY + index * lineSpacing);
       });
 
       // Draw values and percentages side by side within each column
@@ -1137,6 +1301,10 @@ function generateMonthlyPDF(
       doc.setLineWidth(0.1);
       doc.line(margin, rowBottom, tableEndX, rowBottom);
 
+      // Reset font size back to label size for next item
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+
       yPosition = startY + rowHeight;
     });
 
@@ -1150,18 +1318,23 @@ function generateMonthlyPDF(
       yPosition += 2;
       doc.setFontSize(isImportant ? 10 : 9);
       doc.setFont('helvetica', 'bold');
-      
+
       // Split total label text to prevent overflow into amount columns
-      const textPadding = labelWidth * 0.15; // 15% of label width for padding
-      const totalLabelLines = doc.splitTextToSize(section.total.label, labelWidth - textPadding);
+      // Increase padding to ensure text never overlaps with value columns
+      const currentFontSize = isImportant ? 10 : 9;
+      const textPadding = Math.max(labelWidth * 0.25, currentFontSize * 3); // At least 25% of label width or 3x font size for better safety
+      const totalLabelLines = doc.splitTextToSize(
+        section.total.label,
+        labelWidth - textPadding
+      );
       const totalStartY = yPosition;
-      
+
       // Calculate total row height
       const totalRowHeight =
         totalLabelLines.length === 1
           ? lineHeight
           : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
-      
+
       // Draw total label lines
       totalLabelLines.forEach((line: string, index: number) => {
         doc.text(line, margin, totalStartY + index * lineSpacing);
@@ -1209,7 +1382,9 @@ function generateMonthlyPDF(
 
       if (totalPercentage) {
         doc.setFontSize(6);
-        doc.text(totalPercentage, totalPercentX, totalStartY, { align: 'right' });
+        doc.text(totalPercentage, totalPercentX, totalStartY, {
+          align: 'right',
+        });
       }
 
       // Draw target percentage if available (for Cost of Sales)
@@ -1372,12 +1547,19 @@ function generateMonthlyPDF(
           if (yPosition + lineHeight > pageHeight - margin) {
             doc.addPage();
             yPosition = margin;
+            // Reset font size after page break
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
           }
 
           // Split text with adequate padding for expense items to prevent overflow
           // Use responsive padding based on label width
+          const indentOffset = item.indent ? item.indent * 8 : 0; // 8pt per indent level for monthly mode
           const textPadding = labelWidth * 0.15; // 15% of label width for padding
-          const labelLines = doc.splitTextToSize(item.label, labelWidth - textPadding);
+          const labelLines = doc.splitTextToSize(
+            item.label,
+            labelWidth - textPadding - indentOffset
+          );
           const startY = yPosition;
 
           const rowHeight =
@@ -1385,9 +1567,9 @@ function generateMonthlyPDF(
               ? lineHeight
               : (labelLines.length - 1) * lineSpacing + lineHeight;
 
-          // Draw label
+          // Draw label with indentation if needed
           labelLines.forEach((line: string, index: number) => {
-            doc.text(line, margin, startY + index * lineSpacing);
+            doc.text(line, margin + indentOffset, startY + index * lineSpacing);
           });
 
           // Draw values and percentages side by side within each column - match Income style
@@ -1406,6 +1588,7 @@ function generateMonthlyPDF(
             if (percentage) {
               doc.setFontSize(6);
               doc.text(percentage, percentX, startY, { align: 'right' });
+              doc.setFontSize(8); // Reset font size after percentage
             }
 
             xPos += columnWidth;
@@ -1426,6 +1609,10 @@ function generateMonthlyPDF(
               align: 'right',
             });
           }
+
+          // Reset font size back to label size for next item
+          doc.setFontSize(8);
+          doc.setFont('helvetica', 'normal');
 
           // Draw line under row - use tableEndX to match table width
           const lastLineBaseline =
@@ -1451,23 +1638,26 @@ function generateMonthlyPDF(
         yPosition += 2;
         doc.setFontSize(9);
         doc.setFont('helvetica', 'bold');
-        
+
         // Split total label text to prevent overflow into amount columns
         // Use larger padding for bold text (bold takes more space) and ensure no overlap
         const currentFontSize = 9;
-        // Use percentage of label width but ensure minimum padding
-        const minPadding = Math.max(20, currentFontSize * 2.5); // At least 20pt, or 2.5x font size
-        const percentPadding = labelWidth * 0.2; // 20% of label width
+        // Use percentage of label width but ensure minimum padding - increase for better safety
+        const minPadding = Math.max(25, currentFontSize * 3); // At least 25pt, or 3x font size
+        const percentPadding = labelWidth * 0.25; // 25% of label width (increased from 20%)
         const textPadding = Math.max(minPadding, percentPadding);
-        const totalLabelLines = doc.splitTextToSize(expenseSection.total.label, labelWidth - textPadding);
+        const totalLabelLines = doc.splitTextToSize(
+          expenseSection.total.label,
+          labelWidth - textPadding
+        );
         const totalStartY = yPosition;
-        
+
         // Calculate total row height
         const totalRowHeight =
           totalLabelLines.length === 1
             ? lineHeight
             : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
-        
+
         // Draw total label lines
         totalLabelLines.forEach((line: string, index: number) => {
           doc.text(line, margin, totalStartY + index * lineSpacing);
@@ -1552,23 +1742,26 @@ function generateMonthlyPDF(
       yPosition += 2;
       doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
-      
+
       // Split total label text to prevent overflow into amount columns
       // Use larger padding for bold text (bold takes more space) and ensure no overlap
       const currentFontSize = 9;
-      // Use percentage of label width but ensure minimum padding
-      const minPadding = Math.max(20, currentFontSize * 2.5); // At least 20pt, or 2.5x font size
-      const percentPadding = labelWidth * 0.2; // 20% of label width
+      // Use percentage of label width but ensure minimum padding - increase for better safety
+      const minPadding = Math.max(25, currentFontSize * 3); // At least 25pt, or 3x font size
+      const percentPadding = labelWidth * 0.25; // 25% of label width (increased from 20%)
       const textPadding = Math.max(minPadding, percentPadding);
-      const totalLabelLines = doc.splitTextToSize(parsed.expenses.total.label, labelWidth - textPadding);
+      const totalLabelLines = doc.splitTextToSize(
+        parsed.expenses.total.label,
+        labelWidth - textPadding
+      );
       const totalStartY = yPosition;
-      
+
       // Calculate total row height
       const totalRowHeight =
         totalLabelLines.length === 1
           ? lineHeight
           : (totalLabelLines.length - 1) * lineSpacing + lineHeight;
-      
+
       // Draw total label lines
       totalLabelLines.forEach((line: string, index: number) => {
         doc.text(line, margin, totalStartY + index * lineSpacing);
@@ -1610,7 +1803,9 @@ function generateMonthlyPDF(
 
       if (totalPercentage) {
         doc.setFontSize(6);
-        doc.text(totalPercentage, totalPercentX, totalStartY, { align: 'right' });
+        doc.text(totalPercentage, totalPercentX, totalStartY, {
+          align: 'right',
+        });
       }
 
       yPosition = totalStartY + totalRowHeight + sectionSpacing;
@@ -1687,14 +1882,24 @@ function generateMonthlyPDF(
 
 interface MonthlySectionData {
   header: string;
-  items: Array<{ label: string; values: string[]; total: string }>;
+  items: Array<{
+    label: string;
+    values: string[];
+    total: string;
+    indent?: number;
+  }>;
   total: { label: string; values: string[]; total: string } | null;
   isImportant?: boolean;
 }
 
 interface MonthlyExpenseSection {
   header: string;
-  items: Array<{ label: string; values: string[]; total: string }>;
+  items: Array<{
+    label: string;
+    values: string[];
+    total: string;
+    indent?: number;
+  }>;
   total: { label: string; values: string[]; total: string } | null;
 }
 
@@ -1844,7 +2049,22 @@ function parseReportDataMonthly(
           expenseHeader.toUpperCase().includes('EXPENSE') &&
           expenseRow.Rows?.Row
         ) {
-          const items = extractMonthlyItems(expenseRow.Rows.Row, numMonths);
+          // Exclude E17 Payroll Expenses section entirely (only exact "E17 Payroll Expenses" section, not other payroll items)
+          const upperExpenseHeader = expenseHeader.toUpperCase();
+          if (
+            upperExpenseHeader === 'E17 PAYROLL EXPENSES' ||
+            (upperExpenseHeader.startsWith('E17') &&
+              upperExpenseHeader.includes('PAYROLL EXPENSES') &&
+              !upperExpenseHeader.includes('L'))
+          ) {
+            return;
+          }
+
+          const items = extractMonthlyItems(
+            expenseRow.Rows.Row,
+            numMonths,
+            expenseHeader
+          );
           expenseSections.push({
             header: expenseHeader,
             items,
@@ -1915,9 +2135,16 @@ function parseReportDataMonthly(
 
 function extractMonthlyItems(
   rows: any[],
-  numMonths: number
-): Array<{ label: string; values: string[]; total: string }> {
-  const items: Array<{ label: string; values: string[]; total: string }> = [];
+  numMonths: number,
+  expenseSectionHeader?: string,
+  indentLevel: number = 0
+): Array<{ label: string; values: string[]; total: string; indent?: number }> {
+  const items: Array<{
+    label: string;
+    values: string[];
+    total: string;
+    indent?: number;
+  }> = [];
 
   if (!Array.isArray(rows)) return items;
 
@@ -1930,16 +2157,77 @@ function extractMonthlyItems(
     ) {
       const label = row.ColData[0]?.value || '';
       if (label) {
+        // Filter out excluded items
+        // Exclude E17 Payroll Expenses (only exact "E17 Payroll Expenses" section, not other payroll items)
+        const upperLabel = label.toUpperCase();
+        if (
+          upperLabel === 'E17 PAYROLL EXPENSES' ||
+          (upperLabel.startsWith('E17') &&
+            upperLabel.includes('PAYROLL EXPENSES') &&
+            !upperLabel.includes('L'))
+        ) {
+          return;
+        }
+        // Exclude Online Subscription Fee from Expenses C
+        if (
+          expenseSectionHeader?.toUpperCase().includes('EXPENSE C') &&
+          label.toUpperCase().includes('ONLINE SUBSCRIPTION')
+        ) {
+          return;
+        }
+        // Exclude Travel & conference from Expenses E
+        if (
+          expenseSectionHeader?.toUpperCase().includes('EXPENSE E') &&
+          label.toUpperCase().includes('TRAVEL') &&
+          label.toUpperCase().includes('CONFERENCE')
+        ) {
+          return;
+        }
+
         const values = row.ColData.slice(1, numMonths + 1).map(
           (col: any) => col?.value || '0'
         );
         const total = row.ColData[row.ColData.length - 1]?.value || '0';
-        items.push({ label, values, total });
+        items.push({
+          label,
+          values,
+          total,
+          indent: indentLevel > 0 ? indentLevel : undefined,
+        });
       }
     }
 
     if (row.Header?.ColData && row.Rows?.Row) {
       const headerLabel = row.Header.ColData[0]?.value || '';
+
+      // Exclude E17 Payroll Expenses section entirely (only exact "E17 Payroll Expenses" section, not other payroll items)
+      const upperHeaderLabel = headerLabel.toUpperCase();
+      if (
+        upperHeaderLabel === 'E17 PAYROLL EXPENSES' ||
+        (upperHeaderLabel.startsWith('E17') &&
+          upperHeaderLabel.includes('PAYROLL EXPENSES') &&
+          !upperHeaderLabel.includes('L'))
+      ) {
+        return;
+      }
+
+      // Exclude Online Subscription from Expenses C (check header label)
+      if (
+        expenseSectionHeader?.toUpperCase().includes('EXPENSE C') &&
+        headerLabel.toUpperCase().includes('ONLINE SUBSCRIPTION')
+      ) {
+        return;
+      }
+
+      // Exclude Travel & conference from Expenses E (check header label)
+      if (
+        expenseSectionHeader?.toUpperCase().includes('EXPENSE E') &&
+        headerLabel.toUpperCase().includes('TRAVEL') &&
+        headerLabel.toUpperCase().includes('CONFERENCE')
+      ) {
+        return;
+      }
+
       // ColData structure: [label, month1, month2, ..., monthN, total]
       const headerMonthValues = row.Header.ColData.slice(1, -1); // Exclude first and last
       const headerValues =
@@ -1960,6 +2248,40 @@ function extractMonthlyItems(
           (val: string) => val && val !== '' && val !== '0' && val !== '0.00'
         ) ||
         (headerTotal && headerTotal !== '0' && headerTotal !== '0.00');
+
+      // Check if this is a Payroll/Wages section - if so, always extract nested items for detailed display
+      const isPayrollSection =
+        expenseSectionHeader?.toUpperCase().includes('PAYROLL') ||
+        headerLabel.toUpperCase().includes('PAYROLL') ||
+        headerLabel.toUpperCase().includes('WAGES') ||
+        headerLabel.toUpperCase().includes('WAGE');
+
+      // For Payroll sections, add the header first (if it has a value), then add nested items with indentation
+      if (isPayrollSection && row.Rows?.Row && Array.isArray(row.Rows.Row)) {
+        // Add the header first if it has a value
+        if (
+          hasHeaderValue &&
+          headerTotal &&
+          headerTotal !== '0' &&
+          headerTotal !== '0.00'
+        ) {
+          items.push({
+            label: headerLabel,
+            values: headerValues,
+            total: headerTotal,
+          });
+        }
+        // Then add nested items with indentation
+        const nestedItems = extractMonthlyItems(
+          row.Rows.Row,
+          numMonths,
+          expenseSectionHeader,
+          1
+        );
+        items.push(...nestedItems);
+        // Skip the summary for Payroll sections as we show individual items
+        return;
+      }
 
       if (
         hasHeaderValue &&
@@ -1989,6 +2311,20 @@ function extractMonthlyItems(
           const summaryTotal =
             row.Summary.ColData[row.Summary.ColData.length - 1]?.value || '0';
           if (summaryLabel && summaryTotal && summaryTotal !== '0') {
+            // Also filter summary labels
+            if (
+              expenseSectionHeader?.toUpperCase().includes('EXPENSE C') &&
+              summaryLabel.toUpperCase().includes('ONLINE SUBSCRIPTION')
+            ) {
+              return;
+            }
+            if (
+              expenseSectionHeader?.toUpperCase().includes('EXPENSE E') &&
+              summaryLabel.toUpperCase().includes('TRAVEL') &&
+              summaryLabel.toUpperCase().includes('CONFERENCE')
+            ) {
+              return;
+            }
             items.push({
               label: summaryLabel,
               values: summaryValues,
