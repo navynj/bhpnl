@@ -134,12 +134,12 @@ export function MonthlyReportForm({
           </div>
         </div>
         {/* Selected Months */}
-        {selectedMonths.length > 0 && (
-          <div className="flex justify-between items-end">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Selected Months:</label>
-              <div className="flex flex-wrap gap-2">
-                {selectedMonths.map((month) => (
+        <div className="flex justify-between items-end">
+          <div className="space-y-2 w-[320px]">
+            <label className="text-sm font-medium">Selected Months:</label>
+            <div className="flex flex-wrap gap-2">
+              {selectedMonths.length > 0 ? (
+                selectedMonths.map((month) => (
                   <div
                     key={`${month.year}-${month.month}`}
                     className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-md"
@@ -155,11 +155,13 @@ export function MonthlyReportForm({
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                ))}
-              </div>
+                ))
+              ) : (
+                <span className="text-sm text-muted-foreground">No months selected</span>
+              )}
             </div>
           </div>
-        )}
+        </div>
         <div>
           <label className="block text-sm font-medium">&nbsp;</label>
           <Button

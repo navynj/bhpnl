@@ -18,7 +18,7 @@ import {
 const ReportPage = ({ params }: { params: Promise<{ id: string }> }) => {
   const [connectionId, setConnectionId] = useState<string>('');
   const [connectionName, setConnectionName] = useState<string | null>(null);
-  const [reportMode, setReportMode] = useState<ReportMode>('period');
+  const [reportMode, setReportMode] = useState<ReportMode>('monthly');
   const [startDate, setStartDate] = useState<Date | undefined>(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
